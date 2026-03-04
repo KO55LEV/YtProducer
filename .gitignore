@@ -1,0 +1,38 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# .NET
+**/bin/
+**/obj/
+*.nupkg
+*.snupkg
+
+# Logs
+*.log
+logs/
+
+# Node / Vite
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Docker local data
+docker/postgres/data/
+
+# Test and coverage outputs
+TestResults/
+coverage/

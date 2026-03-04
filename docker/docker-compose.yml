@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ytproducer-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ytproducer
+      POSTGRES_PASSWORD: ytproducer
+      POSTGRES_DB: ytproducer
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ytproducer -d ytproducer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    container_name: ytproducer-api
+    build:
+      context: ..
+      dockerfile: src/YtProducer.Api/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__YtProducerDb: Host=postgres;Port=5432;Database=ytproducer;Username=ytproducer;Password=ytproducer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  worker:
+    container_name: ytproducer-worker
+    build:
+      context: ..
+      dockerfile: src/YtProducer.Worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__YtProducerDb: Host=postgres;Port=5432;Database=ytproducer;Username=ytproducer;Password=ytproducer
+      Worker__PollIntervalSeconds: 15
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
