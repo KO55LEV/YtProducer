@@ -2,8 +2,8 @@ namespace YtProducer.Domain.Enums;
 
 public enum JobType
 {
-    MusicGeneration = 0,
-    ImageGeneration = 1,
-    VideoGeneration = 2,
-    Publishing = 3
+    GenerateMusic = 1,
+    GenerateImage = 2,
+    GenerateVisualizer = 3,
+    UploadYoutube = 4
 }

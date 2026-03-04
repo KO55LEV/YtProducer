@@ -36,5 +36,6 @@ app.MapGet("/health", async (CancellationToken cancellationToken) =>
 });
 
 app.MapPlaylistEndpoints();
+app.MapJobEndpoints();
 
 app.Run();

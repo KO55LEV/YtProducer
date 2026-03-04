@@ -11,28 +11,30 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         var useMockData = configuration.GetValue<bool>("UseMockData");
+        var connectionString = configuration.GetConnectionString("YtProducerDb")
+            ?? Environment.GetEnvironmentVariable("ConnectionStrings__YtProducerDb")
+            ?? "Host=localhost;Port=5432;Database=ytproducer;Username=ytproducer;Password=ytproducer";
+
+        services.AddDbContext<YtProducerDbContext>(options => options.UseNpgsql(connectionString));
+
+        services.AddScoped<IJobService, JobService>();
+        services.AddScoped<TrackPipelineService>();
+
+        services.AddScoped<IJobProcessor, GenerateMusicJobProcessor>();
+        services.AddScoped<IJobProcessor, GenerateImageJobProcessor>();
+        services.AddScoped<IJobProcessor, GenerateVisualizerJobProcessor>();
+        services.AddScoped<IJobProcessor, UploadYoutubeJobProcessor>();
+        services.AddScoped<JobProcessorRegistry>();
 
         if (useMockData)
         {
-            // Use mock data from JSON files (no database required)
             services.AddSingleton<IPlaylistRepository, MockPlaylistRepository>();
             Console.WriteLine("✓ Using MockPlaylistRepository (JSON files from docs/Playlist/Outputs)");
         }
         else
         {
-            // Use real database
-            var connectionString = configuration.GetConnectionString("YtProducerDb")
-                ?? Environment.GetEnvironmentVariable("ConnectionStrings__YtProducerDb")
-                ?? "Host=localhost;Port=5432;Database=ytproducer;Username=ytproducer;Password=ytproducer";
-
-            services.AddDbContext<YtProducerDbContext>(options => options.UseNpgsql(connectionString));
-            // TODO: Add real repository implementation when database is ready
             services.AddScoped<IPlaylistRepository, MockPlaylistRepository>(); // Temporary
-            
-            // Job queue services only needed with database
-            services.AddScoped<IJobQueueService, JobQueueService>();
-            
-            Console.WriteLine("✓ Using PostgreSQL database");
+            Console.WriteLine("✓ Using PostgreSQL database with job processing");
         }
 
         services.AddScoped<IMcpClient, McpClient>();

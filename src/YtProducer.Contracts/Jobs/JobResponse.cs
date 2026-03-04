@@ -2,9 +2,23 @@ namespace YtProducer.Contracts.Jobs;
 
 public sealed record JobResponse(
     Guid Id,
-    Guid PlaylistId,
     string Type,
     string Status,
-    DateTimeOffset CreatedAtUtc,
-    DateTimeOffset? StartedAtUtc,
-    DateTimeOffset? CompletedAtUtc);
+    string? TargetType,
+    Guid? TargetId,
+    Guid? JobGroupId,
+    int? Sequence,
+    int Progress,
+    string? PayloadJson,
+    string? ResultJson,
+    int RetryCount,
+    int MaxRetries,
+    string? WorkerId,
+    DateTimeOffset? LeaseExpiresAt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? FinishedAt,
+    DateTimeOffset? LastHeartbeat,
+    string? ErrorCode,
+    string? ErrorMessage,
+    string? IdempotencyKey);

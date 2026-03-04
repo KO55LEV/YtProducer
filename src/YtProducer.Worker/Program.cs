@@ -4,7 +4,7 @@ using YtProducer.Worker.Services;
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddHostedService<PendingJobWorker>();
+builder.Services.AddHostedService<JobWorker>();
 
 var host = builder.Build();
 await host.RunAsync();

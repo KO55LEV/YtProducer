@@ -45,15 +45,29 @@ CREATE INDEX IF NOT EXISTS ix_tracks_status ON tracks(status);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id uuid PRIMARY KEY,
-    playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
     type varchar(32) NOT NULL,
-    status varchar(32) NOT NULL,
-    payload_json jsonb NOT NULL,
-    attempts integer NOT NULL,
-    created_at_utc timestamptz NOT NULL,
-    started_at_utc timestamptz,
-    completed_at_utc timestamptz,
-    error_message varchar(2000)
+    status varchar(32) NOT NULL DEFAULT 'Pending',
+    target_type varchar(32),
+    target_id uuid,
+    job_group_id uuid,
+    sequence integer,
+    progress integer NOT NULL DEFAULT 0,
+    payload_json jsonb,
+    result_json jsonb,
+    retry_count integer NOT NULL DEFAULT 0,
+    max_retries integer NOT NULL DEFAULT 3,
+    worker_id varchar(256),
+    lease_expires_at timestamptz,
+    last_heartbeat timestamptz,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    started_at timestamptz,
+    finished_at timestamptz,
+    error_code varchar(64),
+    error_message text,
+    idempotency_key varchar(128)
 );
 
-CREATE INDEX IF NOT EXISTS ix_jobs_status_created_at_utc ON jobs(status, created_at_utc);
+CREATE INDEX IF NOT EXISTS idx_jobs_poll ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_target ON jobs(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(lease_expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;

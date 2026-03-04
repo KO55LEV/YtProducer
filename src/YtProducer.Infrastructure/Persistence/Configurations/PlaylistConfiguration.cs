@@ -54,11 +54,6 @@ public sealed class PlaylistConfiguration : IEntityTypeConfiguration<Playlist>
             .HasForeignKey(x => x.PlaylistId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasMany(x => x.Jobs)
-            .WithOne(x => x.Playlist)
-            .HasForeignKey(x => x.PlaylistId)
-            .OnDelete(DeleteBehavior.Cascade);
-
         builder.HasIndex(x => x.Status);
         builder.HasIndex(x => x.Theme);
         builder.HasIndex(x => x.CreatedAtUtc);
