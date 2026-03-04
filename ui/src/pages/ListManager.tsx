@@ -59,16 +59,19 @@ export default function ListManager() {
 
       // Map JSON structure to API contract
       const payload = {
-        title: json.theme || "Untitled Playlist",
+        title: json.playlist_title || json.theme || "Untitled Playlist",
         theme: json.theme,
-        description: `${json.playlist_strategy}`,
+        description: json.playlist_description ?? json.playlist_strategy ?? null,
         playlistStrategy: json.playlist_strategy,
+        metadata: JSON.stringify({
+          targetPlatform: json.target_platform
+        }),
         tracks: json.tracks?.map((track: any) => ({
           playlistPosition: track.playlist_position,
           title: track.title,
           youTubeTitle: track.youtube_title,
-          style: track.style,
-          duration: track.duration,
+          style: track.style_summary ?? track.style,
+          duration: track.duration_seconds != null ? String(track.duration_seconds) : track.duration,
           tempoBpm: track.tempo_bpm,
           key: track.key,
           energyLevel: track.energy_level,
@@ -77,14 +80,18 @@ export default function ListManager() {
             hookStrengthScore: track.hook_strength_score,
             thumbnailCtrScore: track.thumbnail_ctr_score,
             hookType: track.hook_type,
+            songStructure: track.song_structure,
             energyCurve: track.energy_curve,
             listeningScenario: track.listening_scenario,
             targetAudience: track.target_audience,
             thumbnailEmotion: track.thumbnail_emotion,
             thumbnailColorPalette: track.thumbnail_color_palette,
+            thumbnailTextHint: track.thumbnail_text_hint,
             playlistCategory: track.playlist_category,
             instruments: track.instruments,
-            stylePrompt: track.style_prompt,
+            visualStyleHint: track.visual_style_hint,
+            lyrics: track.lyrics,
+            musicGenerationPrompt: track.music_generation_prompt,
             imagePrompt: track.image_prompt,
             youtubeDescription: track.youtube_description,
             youtubeTags: track.youtube_tags

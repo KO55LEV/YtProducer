@@ -5,6 +5,7 @@ public sealed record CreatePlaylistRequest(
     string? Theme,
     string? Description,
     string? PlaylistStrategy,
+    string? Metadata,
     TrackData[]? Tracks);
 
 public sealed record TrackData(

@@ -39,6 +39,7 @@ public static class PlaylistEndpoints
             Theme = request.Theme,
             Description = request.Description,
             PlaylistStrategy = request.PlaylistStrategy,
+            Metadata = request.Metadata,
             Status = PlaylistStatus.Draft,
             TrackCount = request.Tracks?.Length ?? 0,
             Tracks = request.Tracks?.Select(t => new Track

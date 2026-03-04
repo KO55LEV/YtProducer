@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using YtProducer.Domain.Entities;
 using YtProducer.Domain.Enums;
@@ -55,8 +56,8 @@ public sealed class MockPlaylistRepository : IPlaylistRepository
                             PlaylistPosition = trackData.PlaylistPosition,
                             Title = trackData.Title ?? "Untitled Track",
                             YouTubeTitle = trackData.YoutubeTitle,
-                            Style = trackData.Style,
-                            Duration = trackData.Duration,
+                            Style = trackData.StyleSummary ?? trackData.Style,
+                            Duration = trackData.DurationSeconds?.ToString() ?? trackData.Duration,
                             TempoBpm = trackData.TempoBpm,
                             Key = trackData.Key,
                             EnergyLevel = trackData.EnergyLevel,
@@ -69,14 +70,19 @@ public sealed class MockPlaylistRepository : IPlaylistRepository
                                 trackData.HookStrengthScore,
                                 trackData.ThumbnailCtrScore,
                                 trackData.HookType,
+                                trackData.SongStructure,
                                 trackData.EnergyCurve,
                                 trackData.ListeningScenario,
                                 trackData.TargetAudience,
                                 trackData.ThumbnailEmotion,
                                 trackData.ThumbnailColorPalette,
+                                trackData.ThumbnailTextHint,
                                 trackData.PlaylistCategory,
                                 trackData.Instruments,
+                                trackData.VisualStyleHint,
                                 trackData.StylePrompt,
+                                trackData.MusicGenerationPrompt,
+                                trackData.Lyrics,
                                 trackData.ImagePrompt,
                                 trackData.YoutubeDescription,
                                 trackData.YoutubeTags
@@ -89,10 +95,16 @@ public sealed class MockPlaylistRepository : IPlaylistRepository
                 var playlist = new Playlist
                 {
                     Id = playlistId,
-                    Title = data.Theme ?? Path.GetFileNameWithoutExtension(file),
+                    Title = data.PlaylistTitle ?? data.Theme ?? Path.GetFileNameWithoutExtension(file),
                     Theme = data.Theme,
-                    Description = data.PlaylistStrategy,
+                    Description = data.PlaylistDescription ?? data.PlaylistStrategy,
                     PlaylistStrategy = data.PlaylistStrategy,
+                    Metadata = JsonSerializer.Serialize(new
+                    {
+                        data.TargetPlatform,
+                        data.PlaylistTitle,
+                        data.PlaylistDescription
+                    }),
                     Status = PlaylistStatus.Active,
                     TrackCount = tracks.Count,
                     CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-Random.Shared.Next(1, 30)),
@@ -144,35 +156,115 @@ public sealed class MockPlaylistRepository : IPlaylistRepository
     // JSON mapping classes
     private class JsonPlaylistData
     {
+        [JsonPropertyName("theme")]
         public string? Theme { get; set; }
+
+        [JsonPropertyName("playlist_title")]
+        public string? PlaylistTitle { get; set; }
+
+        [JsonPropertyName("playlist_description")]
+        public string? PlaylistDescription { get; set; }
+
+        [JsonPropertyName("playlist_strategy")]
         public string? PlaylistStrategy { get; set; }
+
+        [JsonPropertyName("target_platform")]
+        public string? TargetPlatform { get; set; }
+
+        [JsonPropertyName("tracks")]
         public List<JsonTrackData>? Tracks { get; set; }
     }
 
     private class JsonTrackData
     {
+        [JsonPropertyName("playlist_position")]
         public int PlaylistPosition { get; set; }
+
+        [JsonPropertyName("title")]
         public string? Title { get; set; }
+
+        [JsonPropertyName("youtube_title")]
         public string? YoutubeTitle { get; set; }
+
+        [JsonPropertyName("title_virality_score")]
         public int? TitleViralityScore { get; set; }
+
+        [JsonPropertyName("hook_strength_score")]
         public int? HookStrengthScore { get; set; }
+
+        [JsonPropertyName("thumbnail_ctr_score")]
         public int? ThumbnailCtrScore { get; set; }
+
+        [JsonPropertyName("style_summary")]
+        public string? StyleSummary { get; set; }
+
+        [JsonPropertyName("style")]
         public string? Style { get; set; }
+
+        [JsonPropertyName("duration")]
         public string? Duration { get; set; }
+
+        [JsonPropertyName("duration_seconds")]
+        public int? DurationSeconds { get; set; }
+
+        [JsonPropertyName("tempo_bpm")]
         public int? TempoBpm { get; set; }
+
+        [JsonPropertyName("key")]
         public string? Key { get; set; }
+
+        [JsonPropertyName("energy_level")]
         public int? EnergyLevel { get; set; }
+
+        [JsonPropertyName("hook_type")]
         public string? HookType { get; set; }
+
+        [JsonPropertyName("song_structure")]
+        public string? SongStructure { get; set; }
+
+        [JsonPropertyName("energy_curve")]
         public string? EnergyCurve { get; set; }
+
+        [JsonPropertyName("listening_scenario")]
         public string? ListeningScenario { get; set; }
+
+        [JsonPropertyName("target_audience")]
         public string? TargetAudience { get; set; }
+
+        [JsonPropertyName("thumbnail_emotion")]
         public string? ThumbnailEmotion { get; set; }
+
+        [JsonPropertyName("thumbnail_color_palette")]
         public string? ThumbnailColorPalette { get; set; }
+
+        [JsonPropertyName("thumbnail_text_hint")]
+        public string? ThumbnailTextHint { get; set; }
+
+        [JsonPropertyName("playlist_category")]
         public string? PlaylistCategory { get; set; }
+
+        [JsonPropertyName("visual_style_hint")]
+        public string? VisualStyleHint { get; set; }
+
+        [JsonPropertyName("instruments")]
         public List<string>? Instruments { get; set; }
+
+        [JsonPropertyName("style_prompt")]
         public string? StylePrompt { get; set; }
+
+        [JsonPropertyName("lyrics")]
+        public string? Lyrics { get; set; }
+
+        [JsonPropertyName("music_generation_prompt")]
+        public string? MusicGenerationPrompt { get; set; }
+
+        [JsonPropertyName("image_prompt")]
         public string? ImagePrompt { get; set; }
+
+        [JsonPropertyName("youtube_description")]
         public string? YoutubeDescription { get; set; }
+
+        [JsonPropertyName("youtube_tags")]
         public List<string>? YoutubeTags { get; set; }
     }
 }
