@@ -5,6 +5,7 @@ Thumbs.db
 # IDE / Editor
 .idea/
 .vscode/
+.vs/
 *.suo
 *.user
 *.userosscache

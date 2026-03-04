@@ -1,5 +1,8 @@
 using YtProducer.Contracts.Playlists;
 using YtProducer.Contracts.Tracks;
+using YtProducer.Domain.Entities;
+using YtProducer.Domain.Enums;
+using YtProducer.Infrastructure.Services;
 
 namespace YtProducer.Api.Endpoints;
 
@@ -25,70 +28,89 @@ public static class PlaylistEndpoints
         return app;
     }
 
-    private static async Task<IResult> CreatePlaylistAsync(CreatePlaylistRequest request, CancellationToken cancellationToken)
+    private static async Task<IResult> CreatePlaylistAsync(
+        CreatePlaylistRequest request,
+        IPlaylistRepository repository,
+        CancellationToken cancellationToken)
     {
-        await Task.Yield();
-        cancellationToken.ThrowIfCancellationRequested();
+        var playlist = new Playlist
+        {
+            Title = request.Title,
+            Theme = request.Theme,
+            Description = request.Description,
+            PlaylistStrategy = request.PlaylistStrategy,
+            Status = PlaylistStatus.Draft,
+            TrackCount = request.Tracks?.Length ?? 0,
+            Tracks = request.Tracks?.Select(t => new Track
+            {
+                PlaylistPosition = t.PlaylistPosition,
+                Title = t.Title,
+                YouTubeTitle = t.YouTubeTitle,
+                Style = t.Style,
+                Duration = t.Duration,
+                TempoBpm = t.TempoBpm,
+                Key = t.Key,
+                EnergyLevel = t.EnergyLevel,
+                Metadata = t.Metadata,
+                Status = TrackStatus.Pending
+            }).ToList() ?? new List<Track>()
+        };
 
-        var response = new PlaylistResponse(
-            Guid.NewGuid(),
-            request.Title,
-            request.Description,
-            "Draft",
-            Array.Empty<TrackResponse>());
+        var created = await repository.CreateAsync(playlist, cancellationToken);
 
+        var response = MapToPlaylistResponse(created);
         return Results.Created($"/playlists/{response.Id}", response);
     }
 
-    private static async Task<IResult> GetPlaylistsAsync(CancellationToken cancellationToken)
+    private static async Task<IResult> GetPlaylistsAsync(
+        IPlaylistRepository repository,
+        CancellationToken cancellationToken)
     {
-        await Task.Yield();
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var playlists = new List<PlaylistResponse>
-        {
-            new(
-                Guid.Parse("11111111-1111-1111-1111-111111111111"),
-                "Daily Mix",
-                "Placeholder playlist for orchestration dashboard.",
-                "Active",
-                new List<TrackResponse>
-                {
-                    new(
-                        Guid.Parse("22222222-2222-2222-2222-222222222222"),
-                        "Ambient Intro",
-                        "Ready",
-                        1)
-                })
-        };
-
-        return Results.Ok(playlists);
+        var playlists = await repository.GetAllAsync(cancellationToken);
+        var response = playlists.Select(MapToPlaylistResponse).ToList();
+        return Results.Ok(response);
     }
 
-    private static async Task<IResult> GetPlaylistByIdAsync(Guid id, CancellationToken cancellationToken)
+    private static async Task<IResult> GetPlaylistByIdAsync(
+        Guid id,
+        IPlaylistRepository repository,
+        CancellationToken cancellationToken)
     {
-        await Task.Yield();
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (id == Guid.Empty)
+        var playlist = await repository.GetByIdAsync(id, cancellationToken);
+        
+        if (playlist == null)
         {
             return Results.NotFound();
         }
 
-        var response = new PlaylistResponse(
-            id,
-            "Requested Playlist",
-            "Placeholder detail response.",
-            "Draft",
-            new List<TrackResponse>
-            {
-                new(
-                    Guid.Parse("33333333-3333-3333-3333-333333333333"),
-                    "Lead Track",
-                    "Pending",
-                    1)
-            });
-
+        var response = MapToPlaylistResponse(playlist);
         return Results.Ok(response);
+    }
+
+    private static PlaylistResponse MapToPlaylistResponse(Playlist playlist)
+    {
+        return new PlaylistResponse(
+            playlist.Id,
+            playlist.Title,
+            playlist.Theme,
+            playlist.Description,
+            playlist.PlaylistStrategy,
+            playlist.Status.ToString(),
+            playlist.TrackCount,
+            playlist.CreatedAtUtc,
+            playlist.PublishedAtUtc,
+            playlist.Tracks.Select(t => new TrackResponse(
+                t.Id,
+                t.PlaylistPosition,
+                t.Title,
+                t.YouTubeTitle,
+                t.Style,
+                t.Duration,
+                t.TempoBpm,
+                t.Key,
+                t.EnergyLevel,
+                t.Status.ToString()
+            )).ToList()
+        );
     }
 }

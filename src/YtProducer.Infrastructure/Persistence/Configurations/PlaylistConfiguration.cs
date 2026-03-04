@@ -16,22 +16,38 @@ public sealed class PlaylistConfiguration : IEntityTypeConfiguration<Playlist>
             .ValueGeneratedNever();
 
         builder.Property(x => x.Title)
-            .HasMaxLength(200)
+            .HasMaxLength(255)
             .IsRequired();
+
+        builder.Property(x => x.Theme)
+            .HasMaxLength(200);
 
         builder.Property(x => x.Description)
             .HasMaxLength(2000);
+
+        builder.Property(x => x.PlaylistStrategy)
+            .HasColumnType("text");
 
         builder.Property(x => x.Status)
             .HasConversion<string>()
             .HasMaxLength(32)
             .IsRequired();
 
+        builder.Property(x => x.TrackCount)
+            .HasDefaultValue(0);
+
+        builder.Property(x => x.Metadata)
+            .HasColumnType("jsonb");
+
         builder.Property(x => x.CreatedAtUtc)
-            .IsRequired();
+            .IsRequired()
+            .HasDefaultValueSql("NOW()");
 
         builder.Property(x => x.UpdatedAtUtc)
-            .IsRequired();
+            .IsRequired()
+            .HasDefaultValueSql("NOW()");
+
+        builder.Property(x => x.PublishedAtUtc);
 
         builder.HasMany(x => x.Tracks)
             .WithOne(x => x.Playlist)
@@ -42,5 +58,9 @@ public sealed class PlaylistConfiguration : IEntityTypeConfiguration<Playlist>
             .WithOne(x => x.Playlist)
             .HasForeignKey(x => x.PlaylistId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasIndex(x => x.Status);
+        builder.HasIndex(x => x.Theme);
+        builder.HasIndex(x => x.CreatedAtUtc);
     }
 }

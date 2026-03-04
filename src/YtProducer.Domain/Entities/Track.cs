@@ -8,17 +8,31 @@ public sealed class Track
 
     public Guid PlaylistId { get; set; }
 
+    public int PlaylistPosition { get; set; }
+
     public string Title { get; set; } = string.Empty;
 
-    public string SourceUrl { get; set; } = string.Empty;
+    public string? YouTubeTitle { get; set; }
 
-    public int SortOrder { get; set; }
+    public string? SourceUrl { get; set; }
 
-    public TimeSpan? Duration { get; set; }
+    public string? Style { get; set; }
+
+    public string? Duration { get; set; }
+
+    public int? TempoBpm { get; set; }
+
+    public string? Key { get; set; }
+
+    public int? EnergyLevel { get; set; }
 
     public TrackStatus Status { get; set; } = TrackStatus.Pending;
 
+    public string? Metadata { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; }
+
+    public DateTimeOffset UpdatedAtUtc { get; set; }
 
     public Playlist? Playlist { get; set; }
 }
