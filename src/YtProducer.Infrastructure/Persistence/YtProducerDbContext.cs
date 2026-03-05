@@ -18,6 +18,8 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<YoutubePlaylist> YoutubePlaylists => Set<YoutubePlaylist>();
 
+    public DbSet<YoutubeUploadQueue> YoutubeUploadQueues => Set<YoutubeUploadQueue>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(YtProducerDbContext).Assembly);

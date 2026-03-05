@@ -1,0 +1,17 @@
+{
+  "title": "My Awesome Gym Workout Video",
+  "description": "This is an amazing workout video with high-energy music to pump up your training session.",
+  "tags": [
+    "gym music",
+    "workout",
+    "fitness",
+    "motivation",
+    "training"
+  ],
+  "categoryId": 10,
+  "videoFilePath": "/media/videos/workout-session-001.mp4",
+  "thumbnailFilePath": "/media/thumbnails/workout-session-001.jpg",
+  "priority": 5,
+  "scheduledUploadAt": "2026-03-06T10:00:00Z",
+  "maxAttempts": 3
+}

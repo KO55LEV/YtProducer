@@ -38,6 +38,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.AddScoped<IYoutubePlaylistRepository, YoutubePlaylistRepository>();
+        services.AddScoped<IYoutubeUploadQueueService, YoutubeUploadQueueService>();
 
         services.AddScoped<IMcpClient, McpClient>();
 

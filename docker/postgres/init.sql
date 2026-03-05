@@ -96,3 +96,28 @@ CREATE INDEX IF NOT EXISTS idx_jobs_poll ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_target ON jobs(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(lease_expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS youtube_upload_queue (
+    id uuid PRIMARY KEY,
+    status varchar(32) NOT NULL DEFAULT 'Pending',
+    priority integer NOT NULL DEFAULT 0,
+    title varchar(255) NOT NULL,
+    description varchar(5000),
+    tags text[],
+    category_id integer NOT NULL DEFAULT 10,
+    video_file_path varchar(1000) NOT NULL,
+    thumbnail_file_path varchar(1000),
+    youtube_video_id varchar(128),
+    youtube_url varchar(500),
+    scheduled_upload_at timestamptz,
+    attempts integer NOT NULL DEFAULT 0,
+    max_attempts integer NOT NULL DEFAULT 5,
+    last_error text,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    updated_at timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ix_youtube_upload_queue_status ON youtube_upload_queue(status);
+CREATE INDEX IF NOT EXISTS ix_youtube_upload_queue_scheduled_upload_at ON youtube_upload_queue(scheduled_upload_at);
+CREATE INDEX IF NOT EXISTS ix_youtube_upload_queue_priority ON youtube_upload_queue(priority);
+CREATE INDEX IF NOT EXISTS ix_youtube_upload_queue_composite ON youtube_upload_queue(status, scheduled_upload_at, priority);
