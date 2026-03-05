@@ -37,6 +37,8 @@ public static class ServiceCollectionExtensions
             Console.WriteLine("✓ Using PostgreSQL database with job processing");
         }
 
+        services.AddScoped<IYoutubePlaylistRepository, YoutubePlaylistRepository>();
+
         services.AddScoped<IMcpClient, McpClient>();
 
         return services;

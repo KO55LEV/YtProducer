@@ -36,6 +36,9 @@ public sealed class PlaylistConfiguration : IEntityTypeConfiguration<Playlist>
         builder.Property(x => x.TrackCount)
             .HasDefaultValue(0);
 
+        builder.Property(x => x.YoutubePlaylistId)
+            .HasMaxLength(128);
+
         builder.Property(x => x.Metadata)
             .HasColumnType("jsonb");
 
@@ -56,6 +59,7 @@ public sealed class PlaylistConfiguration : IEntityTypeConfiguration<Playlist>
 
         builder.HasIndex(x => x.Status);
         builder.HasIndex(x => x.Theme);
+        builder.HasIndex(x => x.YoutubePlaylistId);
         builder.HasIndex(x => x.CreatedAtUtc);
     }
 }

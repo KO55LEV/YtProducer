@@ -10,6 +10,7 @@ export default function Header() {
         </Link>
         <nav className="nav">
           <Link to="/" className="nav-link">Playlists</Link>
+          <Link to="/youtube-playlists" className="nav-link">YouTube Playlists</Link>
         </nav>
       </div>
     </header>

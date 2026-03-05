@@ -18,6 +18,8 @@ public sealed class Playlist
 
     public int TrackCount { get; set; }
 
+    public string? YoutubePlaylistId { get; set; }
+
     public string? Metadata { get; set; }
 
     public DateTimeOffset CreatedAtUtc { get; set; }

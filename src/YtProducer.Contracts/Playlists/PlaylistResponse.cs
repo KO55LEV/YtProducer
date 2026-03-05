@@ -10,6 +10,7 @@ public sealed record PlaylistResponse(
     string? PlaylistStrategy,
     string Status,
     int TrackCount,
+    string? YoutubePlaylistId,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? PublishedAtUtc,
     IReadOnlyList<TrackResponse> Tracks);

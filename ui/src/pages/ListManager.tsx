@@ -126,6 +126,9 @@ export default function ListManager() {
           <p className="page-subtitle">Manage and orchestrate your YouTube playlist production</p>
         </div>
         <div className="upload-section">
+          <Link to="/youtube-playlists" className="btn btn-secondary">
+            YouTube Playlists
+          </Link>
           <label htmlFor="file-upload" className="btn btn-primary">
             {uploading ? "Uploading..." : "Upload JSON"}
           </label>

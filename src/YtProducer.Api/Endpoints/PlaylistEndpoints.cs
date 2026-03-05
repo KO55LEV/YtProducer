@@ -98,6 +98,7 @@ public static class PlaylistEndpoints
             playlist.PlaylistStrategy,
             playlist.Status.ToString(),
             playlist.TrackCount,
+            playlist.YoutubePlaylistId,
             playlist.CreatedAtUtc,
             playlist.PublishedAtUtc,
             playlist.Tracks.Select(t => new TrackResponse(

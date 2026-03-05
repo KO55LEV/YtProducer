@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS playlists (
     playlist_strategy text,
     status varchar(32) NOT NULL DEFAULT 'Draft',
     track_count integer DEFAULT 0,
+    youtube_playlist_id varchar(128),
     metadata jsonb,
     created_at_utc timestamptz NOT NULL DEFAULT NOW(),
     updated_at_utc timestamptz NOT NULL DEFAULT NOW(),
@@ -14,8 +15,32 @@ CREATE TABLE IF NOT EXISTS playlists (
 
 CREATE INDEX IF NOT EXISTS ix_playlists_status ON playlists(status);
 CREATE INDEX IF NOT EXISTS ix_playlists_theme ON playlists(theme);
+CREATE INDEX IF NOT EXISTS ix_playlists_youtube_playlist_id ON playlists(youtube_playlist_id);
 CREATE INDEX IF NOT EXISTS ix_playlists_created_at ON playlists(created_at_utc DESC);
 CREATE INDEX IF NOT EXISTS ix_playlists_metadata ON playlists USING gin(metadata);
+
+CREATE TABLE IF NOT EXISTS youtube_playlists (
+    id uuid PRIMARY KEY,
+    youtube_playlist_id varchar(128) NOT NULL,
+    title varchar(255),
+    description varchar(5000),
+    status varchar(32),
+    privacy_status varchar(32),
+    channel_id varchar(128),
+    channel_title varchar(255),
+    item_count integer,
+    published_at_utc timestamptz,
+    thumbnail_url varchar(1000),
+    etag varchar(128),
+    last_synced_at_utc timestamptz,
+    metadata jsonb,
+    created_at_utc timestamptz NOT NULL DEFAULT NOW(),
+    updated_at_utc timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ix_youtube_playlists_youtube_id ON youtube_playlists(youtube_playlist_id);
+CREATE INDEX IF NOT EXISTS ix_youtube_playlists_status ON youtube_playlists(status);
+CREATE INDEX IF NOT EXISTS ix_youtube_playlists_metadata ON youtube_playlists USING gin(metadata);
 
 CREATE TABLE IF NOT EXISTS tracks (
     id uuid PRIMARY KEY,

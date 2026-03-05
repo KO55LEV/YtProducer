@@ -16,6 +16,8 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<Job> Jobs => Set<Job>();
 
+    public DbSet<YoutubePlaylist> YoutubePlaylists => Set<YoutubePlaylist>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(YtProducerDbContext).Assembly);

@@ -19,7 +19,27 @@ export type Playlist = {
   playlistStrategy?: string | null;
   status: string;
   trackCount: number;
+  youtubePlaylistId?: string | null;
   createdAtUtc: string;
   publishedAtUtc?: string | null;
   tracks: Track[];
+};
+
+export type YoutubePlaylist = {
+  id: string;
+  youtubePlaylistId: string;
+  title?: string | null;
+  description?: string | null;
+  status?: string | null;
+  privacyStatus?: string | null;
+  channelId?: string | null;
+  channelTitle?: string | null;
+  itemCount?: number | null;
+  publishedAtUtc?: string | null;
+  thumbnailUrl?: string | null;
+  etag?: string | null;
+  lastSyncedAtUtc?: string | null;
+  metadata?: string | null;
+  createdAtUtc: string;
+  updatedAtUtc: string;
 };
