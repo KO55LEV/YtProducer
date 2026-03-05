@@ -35,4 +35,8 @@ public sealed class Track
     public DateTimeOffset UpdatedAtUtc { get; set; }
 
     public Playlist? Playlist { get; set; }
+
+    public ICollection<TrackImage> Images { get; set; } = new List<TrackImage>();
+
+    public ICollection<TrackOnYoutube> YoutubeVideos { get; set; } = new List<TrackOnYoutube>();
 }

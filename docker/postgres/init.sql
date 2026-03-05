@@ -21,6 +21,7 @@ CREATE INDEX IF NOT EXISTS ix_playlists_metadata ON playlists USING gin(metadata
 
 CREATE TABLE IF NOT EXISTS youtube_playlists (
     id uuid PRIMARY KEY,
+    playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
     youtube_playlist_id varchar(128) NOT NULL,
     title varchar(255),
     description varchar(5000),
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS youtube_playlists (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ix_youtube_playlists_youtube_id ON youtube_playlists(youtube_playlist_id);
+CREATE INDEX IF NOT EXISTS ix_youtube_playlists_playlist_id ON youtube_playlists(playlist_id);
 CREATE INDEX IF NOT EXISTS ix_youtube_playlists_status ON youtube_playlists(status);
 CREATE INDEX IF NOT EXISTS ix_youtube_playlists_metadata ON youtube_playlists USING gin(metadata);
 
@@ -67,6 +69,45 @@ CREATE TABLE IF NOT EXISTS tracks (
 
 CREATE INDEX IF NOT EXISTS ix_tracks_playlist_id ON tracks(playlist_id);
 CREATE INDEX IF NOT EXISTS ix_tracks_status ON tracks(status);
+
+CREATE TABLE IF NOT EXISTS track_images (
+    id uuid PRIMARY KEY,
+    track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    playlist_position integer NOT NULL,
+    file_name varchar(256) NOT NULL,
+    file_path varchar(2000) NOT NULL,
+    source_url varchar(2000),
+    model varchar(100),
+    prompt text,
+    aspect_ratio varchar(32),
+    created_at_utc timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ix_track_images_track_id ON track_images(track_id);
+CREATE INDEX IF NOT EXISTS ix_track_images_playlist_id ON track_images(playlist_id);
+CREATE INDEX IF NOT EXISTS ix_track_images_playlist_position ON track_images(playlist_id, playlist_position);
+
+CREATE TABLE IF NOT EXISTS track_on_youtube (
+    id uuid PRIMARY KEY,
+    track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    playlist_position integer NOT NULL,
+    video_id varchar(64) NOT NULL,
+    url varchar(2000),
+    title varchar(200),
+    description text,
+    privacy varchar(32),
+    file_path varchar(2000),
+    status varchar(32),
+    metadata jsonb,
+    created_at_utc timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ix_track_on_youtube_video_id ON track_on_youtube(video_id);
+CREATE INDEX IF NOT EXISTS ix_track_on_youtube_track_id ON track_on_youtube(track_id);
+CREATE INDEX IF NOT EXISTS ix_track_on_youtube_playlist_id ON track_on_youtube(playlist_id);
+CREATE INDEX IF NOT EXISTS ix_track_on_youtube_playlist_position ON track_on_youtube(playlist_id, playlist_position);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id uuid PRIMARY KEY,

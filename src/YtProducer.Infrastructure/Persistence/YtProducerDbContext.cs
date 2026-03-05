@@ -20,6 +20,10 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<YoutubeUploadQueue> YoutubeUploadQueues => Set<YoutubeUploadQueue>();
 
+    public DbSet<TrackImage> TrackImages => Set<TrackImage>();
+
+    public DbSet<TrackOnYoutube> TrackOnYoutube => Set<TrackOnYoutube>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(YtProducerDbContext).Assembly);

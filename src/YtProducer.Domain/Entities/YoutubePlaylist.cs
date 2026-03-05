@@ -4,6 +4,8 @@ public sealed class YoutubePlaylist
 {
     public Guid Id { get; set; }
 
+    public Guid PlaylistId { get; set; }
+
     public string YoutubePlaylistId { get; set; } = string.Empty;
 
     public string? Title { get; set; }

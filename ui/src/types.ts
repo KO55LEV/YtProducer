@@ -25,6 +25,23 @@ export type Playlist = {
   tracks: Track[];
 };
 
+export type PlaylistMediaFile = {
+  fileName: string;
+  url: string;
+};
+
+export type PlaylistTrackMedia = {
+  playlistPosition: number;
+  images: PlaylistMediaFile[];
+  videos: PlaylistMediaFile[];
+  audios: PlaylistMediaFile[];
+};
+
+export type PlaylistMediaResponse = {
+  playlistId: string;
+  tracks: PlaylistTrackMedia[];
+};
+
 export type YoutubePlaylist = {
   id: string;
   youtubePlaylistId: string;

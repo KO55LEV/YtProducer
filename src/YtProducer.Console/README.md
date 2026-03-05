@@ -210,7 +210,7 @@ private async Task TestCustomAsync()
 }
 ```
 
-Then call from `RunAsync()`:
+Then call from `RunPlaylistInitAsync()`:
 ```csharp
 await TestCustomAsync();
 ```

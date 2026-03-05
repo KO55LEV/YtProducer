@@ -10,15 +10,19 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        var useMockData = configuration.GetValue<bool>("UseMockData") 
-            || bool.Parse(Environment.GetEnvironmentVariable("USE_MOCK_DATA") ?? "true");
+        var useMockData = false;
+        var useMockDataValue = configuration["USE_MOCK_DATA"];
+        if (!string.IsNullOrWhiteSpace(useMockDataValue))
+        {
+            _ = bool.TryParse(useMockDataValue, out useMockData);
+        }
         
-        // Build connection string from environment variables
-        var host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost";
-        var port = Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432";
-        var database = Environment.GetEnvironmentVariable("POSTGRES_DATABASE") ?? "ytproducer";
-        var username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "ytproducer";
-        var password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? "ytproducer";
+        // Build connection string from environment-backed configuration
+        var host = configuration["POSTGRES_HOST"] ?? "localhost";
+        var port = configuration["POSTGRES_PORT"] ?? "5432";
+        var database = configuration["POSTGRES_DATABASE"] ?? "ytproducer";
+        var username = configuration["POSTGRES_USER"] ?? "ytproducer";
+        var password = configuration["POSTGRES_PASSWORD"] ?? "ytproducer";
         
         var connectionString = $"Host={host};Port={port};Database={database};Username={username};Password={password}";
 
@@ -40,7 +44,7 @@ public static class ServiceCollectionExtensions
         }
         else
         {
-            services.AddScoped<IPlaylistRepository, MockPlaylistRepository>(); // Temporary
+            services.AddScoped<IPlaylistRepository, PlaylistRepository>();
             Console.WriteLine("✓ Using PostgreSQL database with job processing");
         }
 
