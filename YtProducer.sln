@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YtProducer.Infrastructure",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YtProducer.Contracts", "src\YtProducer.Contracts\YtProducer.Contracts.csproj", "{964EC07C-FC0A-4140-938A-664E83968E3D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "YtProducer.Console", "src\YtProducer.Console\YtProducer.Console.csproj", "{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -85,6 +87,19 @@ Global
 		{964EC07C-FC0A-4140-938A-664E83968E3D}.Release|x64.Build.0 = Release|Any CPU
 		{964EC07C-FC0A-4140-938A-664E83968E3D}.Release|x86.ActiveCfg = Release|Any CPU
 		{964EC07C-FC0A-4140-938A-664E83968E3D}.Release|x86.Build.0 = Release|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Debug|x64.Build.0 = Debug|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Debug|x86.Build.0 = Debug|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Release|x64.ActiveCfg = Release|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Release|x64.Build.0 = Release|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Release|x86.ActiveCfg = Release|Any CPU
+		{5F3A7D8C-9E2F-4A1B-8C3D-7F2E1A9C5D6B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
