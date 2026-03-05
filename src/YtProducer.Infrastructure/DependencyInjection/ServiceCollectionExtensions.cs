@@ -10,10 +10,17 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        var useMockData = configuration.GetValue<bool>("UseMockData");
-        var connectionString = configuration.GetConnectionString("YtProducerDb")
-            ?? Environment.GetEnvironmentVariable("ConnectionStrings__YtProducerDb")
-            ?? "Host=localhost;Port=5432;Database=ytproducer;Username=ytproducer;Password=ytproducer";
+        var useMockData = configuration.GetValue<bool>("UseMockData") 
+            || bool.Parse(Environment.GetEnvironmentVariable("USE_MOCK_DATA") ?? "true");
+        
+        // Build connection string from environment variables
+        var host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost";
+        var port = Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432";
+        var database = Environment.GetEnvironmentVariable("POSTGRES_DATABASE") ?? "ytproducer";
+        var username = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "ytproducer";
+        var password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? "ytproducer";
+        
+        var connectionString = $"Host={host};Port={port};Database={database};Username={username};Password={password}";
 
         services.AddDbContext<YtProducerDbContext>(options => options.UseNpgsql(connectionString));
 
