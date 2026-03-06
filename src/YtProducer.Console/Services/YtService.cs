@@ -21,6 +21,7 @@ public class YtService
 {
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
     private static readonly string[] AudioExtensions = [".mp3"];
+    private static readonly int[] YoutubePublishHoursUtc = [8, 14, 18];
     private const string MediaGenerationStateFileName = ".media-generation-state.json";
 
     private readonly YtProducerDbContext _context;
@@ -390,6 +391,30 @@ public class YtService
         await UploadYoutubeThumbnailAsync(playlistId, position);
     }
 
+    public async Task RunUploadYoutubeVideoWithThumbnailAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length < 2)
+        {
+            global::System.Console.WriteLine("Usage: upload-youtube-video-with-thumbnail <playlistId> <position>");
+            return;
+        }
+
+        if (!Guid.TryParse(commandArgs[0], out var playlistId))
+        {
+            global::System.Console.WriteLine("Invalid playlistId.");
+            return;
+        }
+
+        if (!int.TryParse(commandArgs[1], out var position) || position <= 0)
+        {
+            global::System.Console.WriteLine("Invalid position. Must be a positive integer.");
+            return;
+        }
+
+        await UploadYoutubeVideoAsync(playlistId, position);
+        await UploadYoutubeThumbnailAsync(playlistId, position);
+    }
+
     public async Task RunAddYoutubeVideosToPlaylistAsync(string[] commandArgs)
     {
         if (commandArgs.Length < 1)
@@ -405,6 +430,53 @@ public class YtService
         }
 
         await AddYoutubeVideosToPlaylistAsync(playlistId);
+    }
+
+    public async Task RunTrackCreateYoutubeVideoThumbnailAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length < 1)
+        {
+            global::System.Console.WriteLine("Usage: track-create-youtube-video-thumbnail <playlistId> [position]");
+            return;
+        }
+
+        if (!Guid.TryParse(commandArgs[0], out var playlistId))
+        {
+            global::System.Console.WriteLine("Invalid playlistId.");
+            return;
+        }
+
+        if (commandArgs.Length == 1)
+        {
+            var positions = await _context.Tracks
+                .AsNoTracking()
+                .Where(t => t.PlaylistId == playlistId)
+                .OrderBy(t => t.PlaylistPosition)
+                .Select(t => t.PlaylistPosition)
+                .Distinct()
+                .ToListAsync();
+
+            if (positions.Count == 0)
+            {
+                global::System.Console.WriteLine("No tracks found for playlist.");
+                return;
+            }
+
+            foreach (var trackPosition in positions)
+            {
+                await CreateYoutubeVideoThumbnailAsync(playlistId, trackPosition);
+            }
+
+            return;
+        }
+
+        if (!int.TryParse(commandArgs[1], out var position) || position <= 0)
+        {
+            global::System.Console.WriteLine("Invalid position. Must be a positive integer.");
+            return;
+        }
+
+        await CreateYoutubeVideoThumbnailAsync(playlistId, position);
     }
 
     private async Task PrintAllPlaylistsAsync()
@@ -732,7 +804,6 @@ public class YtService
         var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_PROJECT")
             ?? "OnlineTeamTools.MCP.YouTube/OnlineTeamTools.MCP.YouTube.csproj";
 
-        var privacy = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_VIDEO_PRIVACY") ?? "private";
         var allowedRoot = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_ALLOWED_ROOT")
             ?? Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
 
@@ -770,7 +841,10 @@ public class YtService
         }
 
         var title = track.YouTubeTitle ?? track.Title;
-        var description = ResolveYoutubeDescription(track.Metadata, playlist.Metadata, playlist.Description);
+        var description = ResolveYoutubeDescription(track, playlist);
+        var publishState = await GetOrCreateYoutubeLastPublishedDateAsync();
+        var publishAt = GetNextYoutubePublishSlotUtc(publishState.LastPublishedDate);
+        var scheduledPrivacy = "private";
 
         var result = await ExecuteYoutubeUploadVideoAsync(
             mcpWorkingDirectory,
@@ -779,7 +853,8 @@ public class YtService
             videoPath,
             title,
             description,
-            privacy);
+            scheduledPrivacy,
+            publishAt);
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.VideoId))
         {
@@ -797,17 +872,19 @@ public class YtService
             Url = result.Url,
             Title = title,
             Description = description,
-            Privacy = privacy,
+            Privacy = scheduledPrivacy,
             FilePath = videoPath,
             Status = "uploaded",
             Metadata = null,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
+        publishState.LastPublishedDate = publishAt;
+        publishState.VideoId = result.VideoId;
         _context.Add(record);
         await _context.SaveChangesAsync();
 
-        global::System.Console.WriteLine($"youtube upload complete: {result.VideoId}");
+        global::System.Console.WriteLine($"youtube upload complete: {result.VideoId} scheduled_at_utc={publishAt:yyyy-MM-ddTHH:mm:ssZ}");
     }
 
     private async Task UploadYoutubeThumbnailAsync(Guid playlistId, int position)
@@ -839,7 +916,8 @@ public class YtService
             return;
         }
 
-        var imagePath = ResolveImagePathForPosition(playlistFolderPath, position);
+        var imagePath = ResolveYoutubeThumbnailPathForPosition(playlistFolderPath, position)
+            ?? ResolveImagePathForPosition(playlistFolderPath, position);
         if (imagePath == null)
         {
             global::System.Console.WriteLine($"Image file not found for position {position}.");
@@ -961,6 +1039,238 @@ public class YtService
 
         global::System.Console.WriteLine(
             $"youtube playlist add complete: playlist_id={youtubePlaylistId} added={result.AddedCount}");
+    }
+
+    private async Task CreateYoutubeVideoThumbnailAsync(Guid playlistId, int position)
+    {
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            global::System.Console.WriteLine("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
+            return;
+        }
+
+        var mcpMediaWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_MEDIA_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(mcpMediaWorkingDirectory))
+        {
+            global::System.Console.WriteLine("YT_PRODUCER_MCP_MEDIA_WORKING_DIRECTORY is not configured.");
+            return;
+        }
+
+        var mcpMediaProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_MEDIA_PROJECT")
+            ?? "OnlineTeamTools.MCP.Media/OnlineTeamTools.MCP.Media.csproj";
+        var toolName = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_MEDIA_THUMBNAIL_TOOL")
+            ?? "media.create_youtube_thumbnail";
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == playlistId);
+        if (playlist == null)
+        {
+            global::System.Console.WriteLine("Playlist not found.");
+            return;
+        }
+
+        var track = await _context.Tracks
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.PlaylistId == playlistId && t.PlaylistPosition == position);
+        if (track == null)
+        {
+            global::System.Console.WriteLine("Track not found for position.");
+            return;
+        }
+
+        var playlistFolderPath = Path.Combine(workingDirectory, GetPlaylistFolderName(playlistId));
+        if (!Directory.Exists(playlistFolderPath))
+        {
+            global::System.Console.WriteLine($"Playlist folder not found: {playlistFolderPath}");
+            return;
+        }
+
+        var imagePath = ResolveImagePathForPosition(playlistFolderPath, position);
+        if (imagePath == null)
+        {
+            global::System.Console.WriteLine($"Image file not found for position {position}.");
+            return;
+        }
+
+        var extension = Path.GetExtension(imagePath);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ".png";
+        }
+
+        var outputPath = Path.Combine(playlistFolderPath, $"{position}_thumbnail{extension.ToLowerInvariant()}");
+        if (File.Exists(outputPath))
+        {
+            try
+            {
+                File.Delete(outputPath);
+            }
+            catch (Exception ex)
+            {
+                global::System.Console.WriteLine(
+                    $"track thumbnail generation failed playlist={playlistId} position={position} error=failed to delete existing thumbnail: {ex.Message}");
+                return;
+            }
+        }
+
+        var logoPath = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_LOGO_PATH");
+        var headlineOverride = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE");
+        var subheadlineOverride = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE");
+        var headlineFont = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE_FONT");
+        var subheadlineFont = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE_FONT");
+        var headlineColor = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE_COLOR");
+        var subheadlineColor = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE_COLOR");
+        var visualStyleHint = TryGetMetadataString(track.Metadata, "visualStyleHint")
+            ?? TryGetMetadataString(playlist.Metadata, "visualStyleHint");
+        var headline = ResolveThumbnailHeadline(track, playlist, headlineOverride);
+        var subheadline = ResolveThumbnailSubheadline(track, playlist, subheadlineOverride);
+        headlineFont = ResolveThumbnailHeadlineFont(headlineFont, visualStyleHint);
+        subheadlineFont = ResolveThumbnailSubheadlineFont(subheadlineFont, visualStyleHint);
+
+        var result = await ExecuteCreateYoutubeVideoThumbnailAsync(
+            mcpMediaWorkingDirectory,
+            mcpMediaProject,
+            toolName,
+            imagePath,
+            outputPath,
+            logoPath,
+            headline,
+            subheadline,
+            headlineFont,
+            subheadlineFont,
+            headlineColor,
+            subheadlineColor);
+
+        if (!result.Success)
+        {
+            global::System.Console.WriteLine(
+                $"track thumbnail generation failed playlist={playlistId} position={position} error={result.ErrorMessage}");
+            return;
+        }
+
+        global::System.Console.WriteLine(
+            $"track thumbnail generated playlist={playlistId} position={position} file={result.OutputPath ?? outputPath}");
+    }
+
+    private static string ResolveThumbnailHeadline(Track track, Playlist playlist, string? headlineOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(headlineOverride))
+        {
+            return headlineOverride.Trim();
+        }
+
+        var hint = TryGetMetadataString(track.Metadata, "thumbnailTextHint")
+            ?? TryGetMetadataString(playlist.Metadata, "thumbnailTextHint");
+        if (!string.IsNullOrWhiteSpace(hint))
+        {
+            return NormalizeHeadline(hint);
+        }
+
+        var hookType = TryGetMetadataString(track.Metadata, "hookType");
+        if (!string.IsNullOrWhiteSpace(hookType))
+        {
+            var firstWord = hookType
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(firstWord))
+            {
+                return NormalizeHeadline(firstWord);
+            }
+        }
+
+        return "FOCUS";
+    }
+
+    private static string ResolveThumbnailSubheadline(Track track, Playlist playlist, string? subheadlineOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(subheadlineOverride))
+        {
+            return subheadlineOverride.Trim();
+        }
+
+        var scenario = TryGetMetadataString(track.Metadata, "listeningScenario")
+            ?? TryGetMetadataString(track.Metadata, "playlistCategory")
+            ?? TryGetMetadataString(playlist.Metadata, "playlistCategory")
+            ?? "workout";
+
+        var musicPrompt = TryGetMetadataString(track.Metadata, "musicGenerationPrompt")
+            ?? TryGetMetadataString(playlist.Metadata, "musicGenerationPrompt");
+        var subgenre = TryExtractFieldFromPrompt(musicPrompt, "Subgenre")
+            ?? TryExtractFieldFromPrompt(musicPrompt, "Genre");
+
+        var scenarioToken = NormalizeHeadline(scenario);
+        if (!string.IsNullOrWhiteSpace(subgenre))
+        {
+            return $"{NormalizeHeadline(subgenre)} {scenarioToken}";
+        }
+
+        return $"WORKOUT {scenarioToken}";
+    }
+
+    private static string ResolveThumbnailHeadlineFont(string? envFont, string? visualStyleHint)
+    {
+        if (!string.IsNullOrWhiteSpace(envFont))
+        {
+            return envFont.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(visualStyleHint) &&
+            (visualStyleHint.Contains("contrast", StringComparison.OrdinalIgnoreCase) ||
+             visualStyleHint.Contains("dramatic", StringComparison.OrdinalIgnoreCase) ||
+             visualStyleHint.Contains("bold", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Bebas Neue";
+        }
+
+        return "Bebas Neue";
+    }
+
+    private static string ResolveThumbnailSubheadlineFont(string? envFont, string? visualStyleHint)
+    {
+        if (!string.IsNullOrWhiteSpace(envFont))
+        {
+            return envFont.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(visualStyleHint) &&
+            visualStyleHint.Contains("clean", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Montserrat";
+        }
+
+        return "Montserrat";
+    }
+
+    private static string NormalizeHeadline(string value)
+    {
+        var cleaned = Regex.Replace(value ?? string.Empty, "[^a-zA-Z0-9\\s]+", " ");
+        cleaned = Regex.Replace(cleaned, "\\s+", " ").Trim();
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            return "FOCUS";
+        }
+
+        return cleaned.ToUpperInvariant();
+    }
+
+    private static string? TryExtractFieldFromPrompt(string? prompt, string field)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return null;
+        }
+
+        var regex = new Regex($"{Regex.Escape(field)}\\s*:\\s*(?<value>[^\\.\\n\\r]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var match = regex.Match(prompt);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var value = match.Groups["value"].Value.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static string GetNextImageOutputPath(string playlistFolderPath, int position)
@@ -1274,7 +1584,8 @@ public class YtService
         string filePath,
         string title,
         string? description,
-        string privacy)
+        string privacy,
+        DateTimeOffset? publishAt)
     {
         var payload = new
         {
@@ -1289,7 +1600,8 @@ public class YtService
                     file_path = filePath,
                     title,
                     description,
-                    privacy
+                    privacy,
+                    publish_at = publishAt?.ToUniversalTime().ToString("O")
                 }
             }
         };
@@ -1304,11 +1616,12 @@ public class YtService
         string filePath,
         string title,
         string? description,
-        string privacy)
+        string privacy,
+        DateTimeOffset? publishAt)
     {
         try
         {
-            var requestJson = BuildYoutubeUploadVideoRequestJson(filePath, title, description, privacy);
+            var requestJson = BuildYoutubeUploadVideoRequestJson(filePath, title, description, privacy, publishAt);
             var startInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
@@ -1941,6 +2254,46 @@ public class YtService
         return (position, variant);
     }
 
+    private async Task<YoutubeLastPublishedDate> GetOrCreateYoutubeLastPublishedDateAsync()
+    {
+        var state = await _context.YoutubeLastPublishedDates
+            .FirstOrDefaultAsync(x => x.Id == 1);
+
+        if (state != null)
+        {
+            return state;
+        }
+
+        state = new YoutubeLastPublishedDate
+        {
+            Id = 1,
+            LastPublishedDate = new DateTimeOffset(2026, 3, 8, 8, 0, 0, TimeSpan.Zero),
+            VideoId = null
+        };
+        _context.Add(state);
+        await _context.SaveChangesAsync();
+        return state;
+    }
+
+    private static DateTimeOffset GetNextYoutubePublishSlotUtc(DateTimeOffset lastPublishedDate)
+    {
+        var utc = lastPublishedDate.ToUniversalTime();
+        var date = utc.Date;
+
+        foreach (var hour in YoutubePublishHoursUtc.OrderBy(h => h))
+        {
+            var candidate = new DateTimeOffset(date.Year, date.Month, date.Day, hour, 0, 0, TimeSpan.Zero);
+            if (candidate > utc)
+            {
+                return candidate;
+            }
+        }
+
+        var nextDay = date.AddDays(1);
+        var firstHour = YoutubePublishHoursUtc.Min();
+        return new DateTimeOffset(nextDay.Year, nextDay.Month, nextDay.Day, firstHour, 0, 0, TimeSpan.Zero);
+    }
+
     private static string BuildVisualizerRequestJsonWithDirs(
         string imagePath,
         string audioPath,
@@ -1968,6 +2321,49 @@ public class YtService
                     keep_temp = false,
                     temp_dir = tempDir,
                     output_dir = outputDir
+                }
+            }
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private static string BuildCreateYoutubeVideoThumbnailRequestJson(
+        string toolName,
+        string imagePath,
+        string outputPath,
+        string? logoPath,
+        string headline,
+        string subheadline,
+        string? headlineFont,
+        string? subheadlineFont,
+        string? headlineColor,
+        string? subheadlineColor)
+    {
+        var payload = new
+        {
+            jsonrpc = "2.0",
+            id = 15,
+            method = "tools/call",
+            @params = new
+            {
+                name = toolName,
+                arguments = new
+                {
+                    image_path = imagePath,
+                    logo_path = string.IsNullOrWhiteSpace(logoPath) ? null : logoPath,
+                    headline,
+                    subheadline,
+                    output_path = outputPath,
+                    style = new
+                    {
+                        headline_font = string.IsNullOrWhiteSpace(headlineFont) ? null : headlineFont,
+                        subheadline_font = string.IsNullOrWhiteSpace(subheadlineFont) ? null : subheadlineFont,
+                        headline_color = string.IsNullOrWhiteSpace(headlineColor) ? null : headlineColor,
+                        subheadline_color = string.IsNullOrWhiteSpace(subheadlineColor) ? null : subheadlineColor,
+                        shadow = true,
+                        stroke = true
+                    }
                 }
             }
         };
@@ -2041,6 +2437,42 @@ public class YtService
                 }
 
                 return TryMatchPosition(name, position);
+            })
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return matches.FirstOrDefault();
+    }
+
+    private static string? ResolveYoutubeThumbnailPathForPosition(string playlistFolderPath, int position)
+    {
+        var preferred = ImageExtensions
+            .Select(ext => Path.Combine(playlistFolderPath, $"{position}_thumbnail{ext}"))
+            .FirstOrDefault(File.Exists);
+
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            return preferred;
+        }
+
+        var matches = Directory.EnumerateFiles(playlistFolderPath)
+            .Where(path =>
+            {
+                var name = Path.GetFileName(path);
+                if (string.IsNullOrWhiteSpace(name) || name.StartsWith("._", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                var extension = Path.GetExtension(name);
+                if (!ImageExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var baseName = Path.GetFileNameWithoutExtension(name);
+                return string.Equals(baseName, $"{position}_thumbnail", StringComparison.OrdinalIgnoreCase)
+                    || baseName.StartsWith($"{position}_thumbnail_", StringComparison.OrdinalIgnoreCase);
             })
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -2165,6 +2597,102 @@ public class YtService
         }
     }
 
+    private async Task<MediaExecutionResult> ExecuteCreateYoutubeVideoThumbnailAsync(
+        string mcpMediaWorkingDirectory,
+        string mcpMediaProject,
+        string toolName,
+        string imagePath,
+        string outputPath,
+        string? logoPath,
+        string headline,
+        string subheadline,
+        string? headlineFont,
+        string? subheadlineFont,
+        string? headlineColor,
+        string? subheadlineColor)
+    {
+        try
+        {
+            var requestJson = BuildCreateYoutubeVideoThumbnailRequestJson(
+                toolName,
+                imagePath,
+                outputPath,
+                logoPath,
+                headline,
+                subheadline,
+                headlineFont,
+                subheadlineFont,
+                headlineColor,
+                subheadlineColor);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"run --project \"{mcpMediaProject}\"",
+                WorkingDirectory = mcpMediaWorkingDirectory,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.Environment["MEDIA_TMP_DIR"] = mcpMediaWorkingDirectory;
+            startInfo.Environment["MEDIA_OUTPUT_DIR"] = Path.GetDirectoryName(outputPath) ?? mcpMediaWorkingDirectory;
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            await process.StandardInput.WriteLineAsync(requestJson);
+            process.StandardInput.Close();
+            var stdOut = await process.StandardOutput.ReadToEndAsync();
+            var stdErr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                var error = string.IsNullOrWhiteSpace(stdErr) ? $"MCP process exit code {process.ExitCode}" : stdErr.Trim();
+                return MediaExecutionResult.Fail(error);
+            }
+
+            var jsonLine = TryExtractJsonRpcLine(stdOut);
+            if (string.IsNullOrWhiteSpace(jsonLine))
+            {
+                return File.Exists(outputPath)
+                    ? MediaExecutionResult.Ok(outputPath)
+                    : MediaExecutionResult.Fail("MCP response did not contain JSON-RPC payload.");
+            }
+
+            using var responseDoc = JsonDocument.Parse(jsonLine);
+            var root = responseDoc.RootElement;
+
+            if (root.TryGetProperty("error", out var errorNode))
+            {
+                return MediaExecutionResult.Fail(errorNode.GetRawText());
+            }
+
+            string? resolvedOutputPath = null;
+            if (root.TryGetProperty("result", out var resultNode))
+            {
+                resolvedOutputPath = ExtractLikelyOutputPath(resultNode);
+            }
+
+            if (string.IsNullOrWhiteSpace(resolvedOutputPath))
+            {
+                resolvedOutputPath = File.Exists(outputPath) ? outputPath : null;
+            }
+
+            if (string.IsNullOrWhiteSpace(resolvedOutputPath))
+            {
+                return MediaExecutionResult.Fail("Thumbnail output file was not produced.");
+            }
+
+            return MediaExecutionResult.Ok(resolvedOutputPath);
+        }
+        catch (Exception ex)
+        {
+            return MediaExecutionResult.Fail(ex.Message);
+        }
+    }
+
     private static bool HasMediaForPosition(IEnumerable<string> fileNames, int position, IReadOnlyCollection<string> allowedExtensions)
     {
         var pattern = $"^{position}(?:_\\d+)?(?:{string.Join("|", allowedExtensions.Select(Regex.Escape))})$";
@@ -2248,28 +2776,116 @@ public class YtService
         return null;
     }
 
-    private static string? ResolveYoutubeDescription(
-        string? trackMetadata,
-        string? playlistMetadata,
-        string? fallbackDescription)
+    private static string? ResolveYoutubeDescription(Track track, Playlist playlist)
     {
-        var trackDescription = TryGetMetadataString(trackMetadata, "youtubeDescription");
-        var trackTags = TryGetMetadataStringArray(trackMetadata, "youtubeTags");
+        var trackMetadata = track.Metadata;
+        var playlistMetadata = playlist.Metadata;
+        var fallbackDescription = playlist.Description;
 
-        if (!string.IsNullOrWhiteSpace(trackDescription))
+        var metadataDescription = TryGetMetadataString(trackMetadata, "youtubeDescription")
+            ?? TryGetMetadataString(playlistMetadata, "youtubeDescription");
+
+        var scenario = FirstNonEmpty(
+            TryGetMetadataString(trackMetadata, "listeningScenario"),
+            TryGetMetadataString(trackMetadata, "playlistCategory"),
+            TryGetMetadataString(playlistMetadata, "playlistCategory"),
+            "workout");
+        var hookType = TryGetMetadataString(trackMetadata, "hookType");
+        var energyCurve = TryGetMetadataString(trackMetadata, "energyCurve");
+        var musicPrompt = TryGetMetadataString(trackMetadata, "musicGenerationPrompt")
+            ?? TryGetMetadataString(playlistMetadata, "musicGenerationPrompt");
+        var genre = TryExtractFieldFromPrompt(musicPrompt, "Genre");
+        var subgenre = TryExtractFieldFromPrompt(musicPrompt, "Subgenre");
+        var bpm = track.TempoBpm?.ToString() ?? TryExtractFieldFromPrompt(musicPrompt, "BPM");
+        var musicalKey = track.Key ?? TryExtractFieldFromPrompt(musicPrompt, "Key");
+        var vibe = FirstNonEmpty(
+            track.Style,
+            TryGetMetadataString(trackMetadata, "thumbnailEmotion"),
+            TryGetMetadataString(trackMetadata, "targetAudience"),
+            hookType,
+            energyCurve,
+            "Focused, Steady, Driving");
+
+        var brandName = Environment.GetEnvironmentVariable("YT_PRODUCER_BRAND_NAME")?.Trim();
+        if (string.IsNullOrWhiteSpace(brandName))
         {
-            return AppendTags(trackDescription, trackTags);
+            brandName = "AuruZ Music";
         }
 
-        var playlistDescription = TryGetMetadataString(playlistMetadata, "youtubeDescription");
-        var playlistTags = TryGetMetadataStringArray(playlistMetadata, "youtubeTags");
-
-        if (!string.IsNullOrWhiteSpace(playlistDescription))
+        var subscribeLink = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_SUBSCRIBE_LINK")?.Trim();
+        if (string.IsNullOrWhiteSpace(subscribeLink))
         {
-            return AppendTags(playlistDescription, playlistTags);
+            subscribeLink = "[Link]";
         }
 
-        return fallbackDescription;
+        var playlistLink = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_PLAYLIST_LINK")?.Trim();
+        if (string.IsNullOrWhiteSpace(playlistLink))
+        {
+            playlistLink = "[Link]";
+        }
+
+        var effectiveGenre = FirstNonEmpty(subgenre, genre, "Electronic Workout");
+        var details = new List<string>
+        {
+            $"Artist: {brandName}",
+            $"Genre: {effectiveGenre} / Instrumental Gym Music",
+            $"Vibe: {vibe}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(bpm))
+        {
+            details.Add($"Tempo: {bpm.Trim()} BPM");
+        }
+
+        if (!string.IsNullOrWhiteSpace(musicalKey))
+        {
+            details.Add($"Key: {musicalKey.Trim()}");
+        }
+
+        if (track.EnergyLevel.HasValue)
+        {
+            details.Add($"Energy: {track.EnergyLevel.Value}/10");
+        }
+
+        var lines = new List<string>
+        {
+            $"Elevate your {scenario.Trim()} ritual with {brandName}. ⚡",
+            string.Empty,
+            $"This {effectiveGenre} track is built to lock your focus and move you into a high-performance state.",
+            $"Whether you're preparing for heavy lifting or cardio, this rhythm helps keep you in the zone."
+        };
+
+        if (!string.IsNullOrWhiteSpace(metadataDescription))
+        {
+            lines.Add(string.Empty);
+            lines.Add(metadataDescription.Trim());
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("🎵 Track Details:");
+        lines.Add(string.Empty);
+        lines.AddRange(details);
+        lines.Add(string.Empty);
+        lines.Add($"👇 Support {brandName}:");
+        lines.Add(string.Empty);
+        lines.Add($"Subscribe for weekly gym fuel: {subscribeLink}");
+        lines.Add($"Save this playlist: {playlistLink}");
+
+        var tags = TryGetMetadataStringArray(trackMetadata, "youtubeTags");
+        if (tags.Count == 0)
+        {
+            tags = TryGetMetadataStringArray(playlistMetadata, "youtubeTags");
+        }
+
+        var hashTagLine = BuildHashtagLine(tags);
+        if (!string.IsNullOrWhiteSpace(hashTagLine))
+        {
+            lines.Add(string.Empty);
+            lines.Add(hashTagLine);
+        }
+
+        var description = string.Join(Environment.NewLine, lines).Trim();
+        return string.IsNullOrWhiteSpace(description) ? fallbackDescription : description;
     }
 
     private static string? TryGetMetadataString(string? metadata, string propertyName)
@@ -2342,11 +2958,11 @@ public class YtService
         }
     }
 
-    private static string AppendTags(string description, IReadOnlyList<string> tags)
+    private static string BuildHashtagLine(IReadOnlyList<string> tags)
     {
         if (tags.Count == 0)
         {
-            return description;
+            return string.Empty;
         }
 
         var tagSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2361,16 +2977,23 @@ public class YtService
 
         if (tagSet.Count == 0)
         {
-            return description;
+            return string.Empty;
         }
 
-        var tagBlock = string.Join(" ", tagSet.Select(tag => $"#{tag}"));
-        if (description.Contains(tagBlock, StringComparison.OrdinalIgnoreCase))
+        return string.Join(" ", tagSet.Take(12).Select(tag => $"#{tag}"));
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
         {
-            return description;
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
         }
 
-        return $"{description} {tagBlock}".Trim();
+        return string.Empty;
     }
 
     private static string NormalizeTag(string tag)

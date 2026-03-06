@@ -109,6 +109,16 @@ CREATE INDEX IF NOT EXISTS ix_track_on_youtube_track_id ON track_on_youtube(trac
 CREATE INDEX IF NOT EXISTS ix_track_on_youtube_playlist_id ON track_on_youtube(playlist_id);
 CREATE INDEX IF NOT EXISTS ix_track_on_youtube_playlist_position ON track_on_youtube(playlist_id, playlist_position);
 
+CREATE TABLE IF NOT EXISTS youtube_last_published_date (
+    id integer PRIMARY KEY CHECK (id = 1),
+    last_published_date timestamptz NOT NULL,
+    video_id varchar(64)
+);
+
+INSERT INTO youtube_last_published_date(id, last_published_date, video_id)
+VALUES (1, '2026-03-08T08:00:00+00:00', NULL)
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS jobs (
     id uuid PRIMARY KEY,
     type varchar(32) NOT NULL,

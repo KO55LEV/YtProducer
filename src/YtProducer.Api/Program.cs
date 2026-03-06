@@ -48,5 +48,6 @@ app.MapPlaylistEndpoints();
 app.MapJobEndpoints();
 app.MapYoutubePlaylistEndpoints();
 app.MapYoutubeUploadQueueEndpoints();
+app.MapYoutubePublishingEndpoints();
 
 app.Run();

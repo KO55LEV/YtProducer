@@ -104,10 +104,25 @@ var commands = new Dictionary<string, Func<IServiceProvider, Task>>(StringCompar
         var ytService = scopedServices.GetRequiredService<YtService>();
         await ytService.RunUploadYoutubeThumbnailAsync(commandArgs);
     },
+    ["upload-youtube-video-with-thumbnail"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunUploadYoutubeVideoWithThumbnailAsync(commandArgs);
+    },
+    ["upload_youtube_video_with_thumbnail"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunUploadYoutubeVideoWithThumbnailAsync(commandArgs);
+    },
     ["add-youtube-videos-to-playlist"] = async scopedServices =>
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
         await ytService.RunAddYoutubeVideosToPlaylistAsync(commandArgs);
+    },
+    ["track-create-youtube-video-thumbnail"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunTrackCreateYoutubeVideoThumbnailAsync(commandArgs);
     }
 };
 

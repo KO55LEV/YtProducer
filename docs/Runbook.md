@@ -33,8 +33,14 @@ dotnet run   -- generate-youtube-playlist <playlistId>
 // upload a playlist video for a specific position
 dotnet run   -- upload-youtube-video <playlistId> <position>
 
-// upload a YouTube thumbnail for a specific position (uses first image)
+// upload a YouTube thumbnail for a specific position
+// prefers <position>_thumbnail.*; fallback to first <position> image
 dotnet run   -- upload-youtube-thumbnail <playlistId> <position>
+
+// create branded track thumbnail from first track image
+// output file: <position>_thumbnail.<originalExt> in the same playlist folder
+// optional env overrides: YT_PRODUCER_THUMBNAIL_LOGO_PATH, YT_PRODUCER_THUMBNAIL_HEADLINE, YT_PRODUCER_THUMBNAIL_SUBHEADLINE
+dotnet run   -- track-create-youtube-video-thumbnail <playlistId> [position]
 
 // add all uploaded track videos (track_on_youtube) to playlist in one MCP call
 dotnet run   -- add-youtube-videos-to-playlist <playlistId>
@@ -62,12 +68,23 @@ dotnet run --project src/YtProducer.Console -- generate-youtube-playlist <playli
 dotnet run -- generate-youtube-playlist ea15b70c-dd1a-48c9-8514-6d2f3dce4811 public
 
 dotnet run -- upload-youtube-video <playlistId> <position> 
+// description is auto-generated from track fields + metadata
+// optional env customization: YT_PRODUCER_BRAND_NAME, YT_PRODUCER_YOUTUBE_SUBSCRIBE_LINK, YT_PRODUCER_YOUTUBE_PLAYLIST_LINK
+// publish scheduling uses DB singleton table youtube_last_published_date and slots: 08:00, 14:00, 18:00 UTC
 
 dotnet run -- upload-youtube-video ea15b70c-dd1a-48c9-8514-6d2f3dce4811 1
+
+// upload video and then upload thumbnail for same track position
+dotnet run -- upload-youtube-video-with-thumbnail <playlistId> <position>
+dotnet run -- upload-youtube-video-with-thumbnail ea15b70c-dd1a-48c9-8514-6d2f3dce4811 1
 
 
 dotnet run -- upload-youtube-thumbnail <playlistId> <position> 
 dotnet run -- upload-youtube-thumbnail ea15b70c-dd1a-48c9-8514-6d2f3dce4811 1
+
+dotnet run -- track-create-youtube-video-thumbnail <playlistId> [position]
+dotnet run -- track-create-youtube-video-thumbnail ea15b70c-dd1a-48c9-8514-6d2f3dce4811 1
+dotnet run -- track-create-youtube-video-thumbnail ea15b70c-dd1a-48c9-8514-6d2f3dce4811
 
 
 
@@ -77,3 +94,14 @@ dotnet run -- add-youtube-video-to-playlist <playlistId>
 dotnet run -- add-youtube-video-to-playlist ea15b70c-dd1a-48c9-8514-6d2f3dce4811
 
 dotnet run   -- add-youtube-videos-to-playlist ea15b70c-dd1a-48c9-8514-6d2f3dce4811
+
+
+dotnet run -- add-youtube-video-to-playlist <playlistId> 
+dotnet run -- add-youtube-video-to-playlist ea15b70c-dd1a-48c9-8514-6d2f3dce4811
+
+dotnet run   -- add-youtube-videos-to-playlist ea15b70c-dd1a-48c9-8514-6d2f3dce4811
+
+
+dotnet run -- track-create-youtube-video-thumbnail <playlistId> <position>
+
+dotnet run -- track-create-youtube-video-thumbnail ea15b70c-dd1a-48c9-8514-6d2f3dce4811 1
