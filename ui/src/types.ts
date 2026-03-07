@@ -80,6 +80,35 @@ export type TrackVideoGeneration = {
   updatedAtUtc: string;
 };
 
+export type TrackLoop = {
+  id: string;
+  playlistId: string;
+  trackId: string;
+  trackPosition: number;
+  loopCount: number;
+  status: string;
+  sourceAudioPath?: string | null;
+  sourceImagePath?: string | null;
+  sourceVideoPath?: string | null;
+  outputVideoPath?: string | null;
+  thumbnailPath?: string | null;
+  youtubeVideoId?: string | null;
+  youtubeUrl?: string | null;
+  title?: string | null;
+  description?: string | null;
+  metadata?: string | null;
+  startedAtUtc?: string | null;
+  finishedAtUtc?: string | null;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+};
+
+export type ScheduleTrackLoopResponse = {
+  jobId: string;
+  jobType: string;
+  loop: TrackLoop;
+};
+
 export type YoutubePlaylist = {
   id: string;
   youtubePlaylistId: string;

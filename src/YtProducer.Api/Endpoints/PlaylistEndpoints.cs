@@ -1,4 +1,6 @@
 using YtProducer.Contracts.Playlists;
+using YtProducer.Contracts.Jobs;
+using YtProducer.Contracts.Loops;
 using YtProducer.Contracts.Tracks;
 using YtProducer.Domain.Entities;
 using YtProducer.Domain.Enums;
@@ -7,6 +9,7 @@ using YtProducer.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.StaticFiles;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace YtProducer.Api.Endpoints;
 
@@ -82,6 +85,12 @@ public static class PlaylistEndpoints
         group.MapPut("/{id:guid}/video-generations/{position:int}", UpsertPlaylistTrackVideoGenerationAsync)
             .WithName("UpsertPlaylistTrackVideoGeneration")
             .Produces<TrackVideoGenerationResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/track-loops", ScheduleTrackLoopAsync)
+            .WithName("ScheduleTrackLoop")
+            .Produces<ScheduleTrackLoopResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
         return app;
@@ -1064,6 +1073,96 @@ public static class PlaylistEndpoints
         return Results.Ok(MapToTrackVideoGenerationResponse(item));
     }
 
+    private static async Task<IResult> ScheduleTrackLoopAsync(
+        Guid id,
+        CreateTrackLoopRequest request,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        IConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        if (request.LoopCount < 2)
+        {
+            return Results.BadRequest(new { message = "loopCount must be 2 or greater" });
+        }
+
+        var playlist = await dbContext.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+        if (playlist is null)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        if (string.IsNullOrWhiteSpace(playlist.YoutubePlaylistId))
+        {
+            return Results.BadRequest(new { message = "Playlist must have youtube playlist created before scheduling loops" });
+        }
+
+        var track = await dbContext.Tracks
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == request.TrackId && x.PlaylistId == id, cancellationToken);
+
+        if (track is null)
+        {
+            return Results.NotFound(new { message = $"Track {request.TrackId} not found in playlist {id}" });
+        }
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+        var playlistRoot = string.IsNullOrWhiteSpace(workingDirectory)
+            ? null
+            : Path.Combine(workingDirectory, id.ToString());
+
+        var now = DateTimeOffset.UtcNow;
+        var loop = new TrackLoop
+        {
+            Id = Guid.NewGuid(),
+            PlaylistId = id,
+            TrackId = track.Id,
+            TrackPosition = track.PlaylistPosition,
+            LoopCount = request.LoopCount,
+            Status = TrackLoopStatus.Pending,
+            SourceAudioPath = ResolvePreferredMediaFile(playlistRoot, track.PlaylistPosition, new[] { ".mp3" }),
+            SourceImagePath = ResolvePreferredMediaFile(playlistRoot, track.PlaylistPosition, new[] { ".jpg", ".jpeg", ".png", ".webp" }),
+            SourceVideoPath = ResolvePreferredMediaFile(playlistRoot, track.PlaylistPosition, new[] { ".mp4", ".mov", ".webm" }),
+            ThumbnailPath = ResolvePreferredMediaFile(playlistRoot, track.PlaylistPosition, new[] { ".jpg", ".jpeg", ".png", ".webp" }, "_thumbnail"),
+            Title = track.Title,
+            Description = track.YouTubeTitle,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+
+        dbContext.TrackLoops.Add(loop);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        var payloadArguments = new CreateTrackLoopJobArguments(
+            loop.Id,
+            loop.PlaylistId,
+            loop.TrackId,
+            loop.TrackPosition,
+            loop.LoopCount);
+
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "create-track-loop",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.CreateTrackLoop,
+            TargetType = "track_loop",
+            TargetId = loop.Id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/playlists/{id}/track-loops/{loop.Id}",
+            new ScheduleTrackLoopResponse(job.Id, job.Type.ToString(), MapToTrackLoopResponse(loop)));
+    }
+
     private static TrackVideoGenerationResponse MapToTrackVideoGenerationResponse(TrackVideoGeneration item)
     {
         return new TrackVideoGenerationResponse(
@@ -1102,5 +1201,86 @@ public static class PlaylistEndpoints
             item.FinishedAtUtc,
             item.CreatedAtUtc,
             item.UpdatedAtUtc);
+    }
+
+    private static TrackLoopResponse MapToTrackLoopResponse(TrackLoop item)
+    {
+        return new TrackLoopResponse(
+            item.Id,
+            item.PlaylistId,
+            item.TrackId,
+            item.TrackPosition,
+            item.LoopCount,
+            item.Status.ToString(),
+            item.SourceAudioPath,
+            item.SourceImagePath,
+            item.SourceVideoPath,
+            item.OutputVideoPath,
+            item.ThumbnailPath,
+            item.YoutubeVideoId,
+            item.YoutubeUrl,
+            item.Title,
+            item.Description,
+            item.Metadata,
+            item.StartedAtUtc,
+            item.FinishedAtUtc,
+            item.CreatedAtUtc,
+            item.UpdatedAtUtc);
+    }
+
+    private static string? ResolvePreferredMediaFile(
+        string? playlistRoot,
+        int playlistPosition,
+        IReadOnlyCollection<string> extensions,
+        string? requiredNameSuffix = null)
+    {
+        if (string.IsNullOrWhiteSpace(playlistRoot) || !Directory.Exists(playlistRoot))
+        {
+            return null;
+        }
+
+        var normalizedExtensions = new HashSet<string>(extensions, StringComparer.OrdinalIgnoreCase);
+
+        var candidates = Directory.EnumerateFiles(playlistRoot)
+            .Where(path => normalizedExtensions.Contains(Path.GetExtension(path)))
+            .Select(path => new
+            {
+                Path = path,
+                Variant = GetMediaVariantOrder(Path.GetFileNameWithoutExtension(path), playlistPosition, requiredNameSuffix)
+            })
+            .Where(x => x.Variant.HasValue)
+            .OrderBy(x => x.Variant!.Value)
+            .ThenBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return candidates.Count == 0 ? null : candidates[0].Path;
+    }
+
+    private static int? GetMediaVariantOrder(string fileNameWithoutExtension, int playlistPosition, string? requiredNameSuffix)
+    {
+        var positionPrefix = playlistPosition.ToString();
+        var expectedBase = string.IsNullOrWhiteSpace(requiredNameSuffix)
+            ? positionPrefix
+            : $"{positionPrefix}{requiredNameSuffix}";
+
+        if (fileNameWithoutExtension.Equals(expectedBase, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        var escapedSuffix = string.IsNullOrWhiteSpace(requiredNameSuffix)
+            ? string.Empty
+            : Regex.Escape(requiredNameSuffix);
+        var match = Regex.Match(
+            fileNameWithoutExtension,
+            $"^{Regex.Escape(positionPrefix)}{escapedSuffix}_(\\d+)$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        return int.TryParse(match.Groups[1].Value, out var parsed) ? parsed : null;
     }
 }

@@ -29,4 +29,6 @@ public sealed class Playlist
     public DateTimeOffset? PublishedAtUtc { get; set; }
 
     public ICollection<Track> Tracks { get; set; } = new List<Track>();
+
+    public ICollection<TrackLoop> TrackLoops { get; set; } = new List<TrackLoop>();
 }

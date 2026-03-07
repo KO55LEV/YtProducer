@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import type { Playlist, PlaylistMediaResponse, PlaylistTrackMedia, Track, TrackVideoGeneration } from "../types";
+import type {
+  Playlist,
+  PlaylistMediaResponse,
+  PlaylistTrackMedia,
+  ScheduleTrackLoopResponse,
+  Track,
+  TrackVideoGeneration
+} from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -34,6 +41,9 @@ export default function PlaylistDetail() {
   const [deleteAudioBusyByKey, setDeleteAudioBusyByKey] = useState<Record<string, boolean>>({});
   const [lightboxState, setLightboxState] = useState<{ position: number; index: number } | null>(null);
   const [videoGenerationsByPosition, setVideoGenerationsByPosition] = useState<Record<number, TrackVideoGeneration>>({});
+  const [loopCountByTrackId, setLoopCountByTrackId] = useState<Record<string, number>>({});
+  const [createLoopBusyByTrackId, setCreateLoopBusyByTrackId] = useState<Record<string, boolean>>({});
+  const [createLoopJobIdByTrackId, setCreateLoopJobIdByTrackId] = useState<Record<string, string>>({});
 
   const resolveMediaUrl = useMemo(() => {
     return (url: string) => (url.startsWith("http") ? url : `${apiBaseUrl}${url}`);
@@ -291,6 +301,35 @@ export default function PlaylistDetail() {
       return false;
     } finally {
       setDeleteAudioBusyByKey((prev) => ({ ...prev, [key]: false }));
+    }
+  }
+
+  async function handleCreateLoop(track: Track): Promise<boolean> {
+    if (!id) return false;
+
+    const loopCount = Math.max(2, Math.trunc(loopCountByTrackId[track.id] ?? 2));
+    try {
+      setCreateLoopBusyByTrackId((prev) => ({ ...prev, [track.id]: true }));
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/track-loops`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trackId: track.id,
+          loopCount
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Create loop failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as ScheduleTrackLoopResponse;
+      setCreateLoopJobIdByTrackId((prev) => ({ ...prev, [track.id]: data.jobId }));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setCreateLoopBusyByTrackId((prev) => ({ ...prev, [track.id]: false }));
     }
   }
 
@@ -627,6 +666,44 @@ export default function PlaylistDetail() {
 
                     if (showVideoProgress) {
                       return null;
+                    }
+
+                    if (playlist.youtubePlaylistId) {
+                      const loopCount = loopCountByTrackId[track.id] ?? 2;
+                      const loopBusy = createLoopBusyByTrackId[track.id] === true;
+                      const scheduledJobId = createLoopJobIdByTrackId[track.id];
+
+                      return (
+                        <div className="track-loop-controls">
+                          <label className="track-loop-input-wrap">
+                            <span className="track-loop-label">Loops</span>
+                            <input
+                              type="number"
+                              min={2}
+                              step={1}
+                              value={loopCount}
+                              onChange={(event) =>
+                                setLoopCountByTrackId((prev) => ({
+                                  ...prev,
+                                  [track.id]: Math.max(2, Number.parseInt(event.target.value || "2", 10) || 2)
+                                }))
+                              }
+                              className="track-loop-input"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="track-loop-btn"
+                            onClick={() => handleCreateLoop(track)}
+                            disabled={loopBusy}
+                          >
+                            {loopBusy ? "Creating..." : "Create Loop"}
+                          </button>
+                          {scheduledJobId && (
+                            <span className="track-loop-scheduled">Scheduled</span>
+                          )}
+                        </div>
+                      );
                     }
 
                     return (

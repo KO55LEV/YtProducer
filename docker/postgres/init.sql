@@ -193,6 +193,35 @@ CREATE INDEX IF NOT EXISTS idx_jobs_target ON jobs(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(lease_expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS track_loops (
+    id uuid PRIMARY KEY,
+    playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    track_position integer NOT NULL,
+    loop_count integer NOT NULL,
+    status varchar(32) NOT NULL DEFAULT 'Pending',
+    source_audio_path varchar(2000),
+    source_image_path varchar(2000),
+    source_video_path varchar(2000),
+    output_video_path varchar(2000),
+    thumbnail_path varchar(2000),
+    youtube_video_id varchar(128),
+    youtube_url varchar(1000),
+    title varchar(255),
+    description varchar(5000),
+    metadata jsonb,
+    started_at_utc timestamptz,
+    finished_at_utc timestamptz,
+    created_at_utc timestamptz NOT NULL DEFAULT NOW(),
+    updated_at_utc timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ix_track_loops_playlist_id ON track_loops(playlist_id);
+CREATE INDEX IF NOT EXISTS ix_track_loops_track_id ON track_loops(track_id);
+CREATE INDEX IF NOT EXISTS ix_track_loops_status ON track_loops(status);
+CREATE INDEX IF NOT EXISTS ix_track_loops_position ON track_loops(playlist_id, track_position);
+CREATE INDEX IF NOT EXISTS ix_track_loops_created_at_utc ON track_loops(created_at_utc);
+
 CREATE TABLE IF NOT EXISTS youtube_upload_queue (
     id uuid PRIMARY KEY,
     status varchar(32) NOT NULL DEFAULT 'Pending',

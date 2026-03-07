@@ -26,6 +26,8 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<TrackVideoGeneration> TrackVideoGenerations => Set<TrackVideoGeneration>();
 
+    public DbSet<TrackLoop> TrackLoops => Set<TrackLoop>();
+
     public DbSet<YoutubeLastPublishedDate> YoutubeLastPublishedDates => Set<YoutubeLastPublishedDate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

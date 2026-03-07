@@ -5,5 +5,6 @@ public enum JobType
     GenerateMusic = 1,
     GenerateImage = 2,
     GenerateVisualizer = 3,
-    UploadYoutube = 4
+    UploadYoutube = 4,
+    CreateTrackLoop = 5
 }
