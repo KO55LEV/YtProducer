@@ -12,7 +12,11 @@ dotnet run -- generate-all-images d8624fb8-da29-41a7-b072-5260b1443689
 dotnet run   -- generate-all-music d8624fb8-da29-41a7-b072-5260b1443689
 
 //generate media
-dotnet run   -- generate-media d8624fb8-da29-41a7-b072-5260b1443689
+dotnet run   -- generate-media-local d8624fb8-da29-41a7-b072-5260b1443689 fast
+
+dotnet run -- generate-media-local <playlistId> legacy
+dotnet run -- generate-media-local <playlistId> quality
+dotnet run -- generate-media-local <playlistId> fast
 
 //generate video-thumbnail for playlist 
 dotnet run -- track-create-youtube-video-thumbnail_v2 d8624fb8-da29-41a7-b072-5260b1443689

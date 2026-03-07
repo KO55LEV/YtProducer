@@ -22,7 +22,8 @@ public sealed class FrameRenderService
         int width,
         int height,
         int seed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<int, int, Task>? onProgressAsync = null)
     {
         Directory.CreateDirectory(framesDir);
 
@@ -36,6 +37,10 @@ public sealed class FrameRenderService
             {
                 var framePath = Path.Combine(framesDir, $"frame_{frameIndex + 1:000000}.png");
                 ImageUtils.SaveRgbaAsPng(framePath, width, height, framePixels);
+                if (onProgressAsync is not null)
+                {
+                    await onProgressAsync(frameIndex + 1, analysis.FrameCount).ConfigureAwait(false);
+                }
                 await Task.CompletedTask;
             },
             cancellationToken).ConfigureAwait(false);
@@ -48,7 +53,8 @@ public sealed class FrameRenderService
         int height,
         int seed,
         Stream output,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<int, int, Task>? onProgressAsync = null)
     {
         await RenderFramesCoreAsync(
             imagePath,

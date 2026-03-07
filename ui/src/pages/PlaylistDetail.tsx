@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import type { Playlist, PlaylistMediaResponse, PlaylistTrackMedia, Track } from "../types";
+import type { Playlist, PlaylistMediaResponse, PlaylistTrackMedia, Track, TrackVideoGeneration } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -33,6 +33,7 @@ export default function PlaylistDetail() {
   const [moveAudioBusyByKey, setMoveAudioBusyByKey] = useState<Record<string, boolean>>({});
   const [deleteAudioBusyByKey, setDeleteAudioBusyByKey] = useState<Record<string, boolean>>({});
   const [lightboxState, setLightboxState] = useState<{ position: number; index: number } | null>(null);
+  const [videoGenerationsByPosition, setVideoGenerationsByPosition] = useState<Record<number, TrackVideoGeneration>>({});
 
   const resolveMediaUrl = useMemo(() => {
     return (url: string) => (url.startsWith("http") ? url : `${apiBaseUrl}${url}`);
@@ -108,24 +109,47 @@ export default function PlaylistDetail() {
   async function reloadMedia(): Promise<void> {
     if (!id) return;
     try {
-      const response = await fetch(`${apiBaseUrl}/playlists/${id}/media`);
-      if (!response.ok) {
-        throw new Error(`Media request failed with status ${response.status}`);
-      }
-
-      const data = (await response.json()) as PlaylistMediaResponse;
-      const map: Record<number, PlaylistTrackMedia> = {};
-      const defaultView: Record<number, "video" | "image"> = {};
-      for (const track of data.tracks) {
-        map[track.playlistPosition] = track;
-        defaultView[track.playlistPosition] = track.videos.length > 0 ? "video" : "image";
-      }
-
-      setMediaByPosition(map);
-      setMediaViewByPosition((prev) => ({ ...defaultView, ...prev }));
+      await Promise.all([reloadMediaFiles(), reloadVideoGenerations()]);
     } catch {
       // Keep existing media state when refresh fails.
     }
+  }
+
+  async function reloadMediaFiles(): Promise<void> {
+    if (!id) return;
+
+    const response = await fetch(`${apiBaseUrl}/playlists/${id}/media`);
+    if (!response.ok) {
+      throw new Error(`Media request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as PlaylistMediaResponse;
+    const map: Record<number, PlaylistTrackMedia> = {};
+    const defaultView: Record<number, "video" | "image"> = {};
+    for (const track of data.tracks) {
+      map[track.playlistPosition] = track;
+      defaultView[track.playlistPosition] = track.videos.length > 0 ? "video" : "image";
+    }
+
+    setMediaByPosition(map);
+    setMediaViewByPosition((prev) => ({ ...defaultView, ...prev }));
+  }
+
+  async function reloadVideoGenerations(): Promise<void> {
+    if (!id) return;
+
+    const response = await fetch(`${apiBaseUrl}/playlists/${id}/video-generations`);
+    if (!response.ok) {
+      throw new Error(`Video generation request failed with status ${response.status}`);
+    }
+
+    const data = (await response.json()) as TrackVideoGeneration[];
+    const map: Record<number, TrackVideoGeneration> = {};
+    for (const item of data) {
+      map[item.playlistPosition] = item;
+    }
+
+    setVideoGenerationsByPosition(map);
   }
 
   async function handleSetBackground(position: number, fileName: string): Promise<boolean> {
@@ -276,21 +300,10 @@ export default function PlaylistDetail() {
     async function fetchMedia(): Promise<void> {
       try {
         setMediaLoading(true);
-        const response = await fetch(`${apiBaseUrl}/playlists/${id}/media`);
-        if (!response.ok) {
-          throw new Error(`Media request failed with status ${response.status}`);
-        }
-        const data = (await response.json()) as PlaylistMediaResponse;
-        const map: Record<number, PlaylistTrackMedia> = {};
-        const defaultView: Record<number, "video" | "image"> = {};
-        for (const track of data.tracks) {
-          map[track.playlistPosition] = track;
-          defaultView[track.playlistPosition] = track.videos.length > 0 ? "video" : "image";
-        }
-        setMediaByPosition(map);
-        setMediaViewByPosition(defaultView);
+        await Promise.all([reloadMediaFiles(), reloadVideoGenerations()]);
       } catch {
         setMediaByPosition({});
+        setVideoGenerationsByPosition({});
       } finally {
         setMediaLoading(false);
       }
@@ -543,9 +556,31 @@ export default function PlaylistDetail() {
                 )}
                 {(() => {
                   const media = mediaByPosition[track.playlistPosition];
+                  const videoGeneration = videoGenerationsByPosition[track.playlistPosition];
                   const audios = media?.audios ?? [];
+                  const showVideoProgress =
+                    playlist.status === "VideoInProgress" &&
+                    videoGeneration &&
+                    videoGeneration.status.toLowerCase() === "in_progress";
                   if (audios.length === 0) {
-                    return null;
+                    return showVideoProgress ? (
+                      <div className="track-video-progress">
+                        <div className="track-video-progress-header">
+                          <span>Video {videoGeneration.progressPercent}%</span>
+                          <span>
+                            {videoGeneration.progressCurrentFrame ?? 0}
+                            /
+                            {videoGeneration.progressTotalFrames ?? 0}
+                          </span>
+                        </div>
+                        <div className="track-video-progress-track">
+                          <div
+                            className="track-video-progress-fill"
+                            style={{ width: `${Math.max(0, Math.min(100, videoGeneration.progressPercent))}%` }}
+                          />
+                        </div>
+                      </div>
+                    ) : null;
                   }
 
                   return (
@@ -561,13 +596,45 @@ export default function PlaylistDetail() {
                           deleteBusy={deleteAudioBusyByKey[`${track.playlistPosition}:${audio.fileName}`] === true}
                         />
                       ))}
+                      {showVideoProgress && (
+                        <div className="track-video-progress">
+                          <div className="track-video-progress-header">
+                            <span>Video {videoGeneration.progressPercent}%</span>
+                            <span>
+                              {videoGeneration.progressCurrentFrame ?? 0}
+                              /
+                              {videoGeneration.progressTotalFrames ?? 0}
+                            </span>
+                          </div>
+                          <div className="track-video-progress-track">
+                            <div
+                              className="track-video-progress-fill"
+                              style={{ width: `${Math.max(0, Math.min(100, videoGeneration.progressPercent))}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
                 <div className="track-status">
-                  <span className={`badge badge-${track.status.toLowerCase()}`}>
-                    {track.status}
-                  </span>
+                  {(() => {
+                    const videoGeneration = videoGenerationsByPosition[track.playlistPosition];
+                    const showVideoProgress =
+                      playlist.status === "VideoInProgress" &&
+                      videoGeneration &&
+                      videoGeneration.status.toLowerCase() === "in_progress";
+
+                    if (showVideoProgress) {
+                      return null;
+                    }
+
+                    return (
+                      <span className={`badge badge-${track.status.toLowerCase()}`}>
+                        {track.status}
+                      </span>
+                    );
+                  })()}
                   {mediaLoading && (
                     <span className="track-media-status">Loading media...</span>
                   )}

@@ -11,11 +11,17 @@ dotnet run -- generate-all-images f36cdc64-488e-4642-b854-907d6a0cda85
 //music
 dotnet run   -- generate-all-music f36cdc64-488e-4642-b854-907d6a0cda85
 
-//generate media
-dotnet run   -- generate-media f36cdc64-488e-4642-b854-907d6a0cda85
+
 
 //generate video-thumbnail for playlist 
-dotnet run -- track-create-youtube-video-thumbnail f36cdc64-488e-4642-b854-907d6a0cda85
+dotnet run -- track-create-youtube-video-thumbnail_v2 f36cdc64-488e-4642-b854-907d6a0cda85
+
+//generate media
+dotnet run   -- generate-media-local f36cdc64-488e-4642-b854-907d6a0cda85 fast
+
+dotnet run -- generate-media-local <playlistId> legacy
+dotnet run -- generate-media-local <playlistId> quality
+dotnet run -- generate-media-local <playlistId> fast
 
 //create channel 
 dotnet run -- generate-youtube-playlist f36cdc64-488e-4642-b854-907d6a0cda85 unlisted

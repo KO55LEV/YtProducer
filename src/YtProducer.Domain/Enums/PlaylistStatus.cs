@@ -10,5 +10,6 @@ public enum PlaylistStatus
     FolderCreated = 5,
     ImagesGenerated = 6,
     MusicGenerated = 7,
-    ThumbnailGenerated = 8
+    ThumbnailGenerated = 8,
+    VideoInProgress = 9
 }

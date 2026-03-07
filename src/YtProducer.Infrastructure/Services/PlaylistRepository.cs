@@ -58,6 +58,9 @@ public sealed class PlaylistRepository : IPlaylistRepository
         playlist.TrackCount = playlist.Tracks.Count;
 
         var tracks = playlist.Tracks.ToList();
+        var usedPositions = new HashSet<int>();
+        var nextAvailablePosition = 1;
+
         for (var index = 0; index < tracks.Count; index++)
         {
             var track = tracks[index];
@@ -65,10 +68,20 @@ public sealed class PlaylistRepository : IPlaylistRepository
             track.PlaylistId = playlist.Id;
             track.CreatedAtUtc = now;
             track.UpdatedAtUtc = now;
-            if (track.PlaylistPosition <= 0)
+
+            if (track.PlaylistPosition > 0 && usedPositions.Add(track.PlaylistPosition))
             {
-                track.PlaylistPosition = index + 1;
+                continue;
             }
+
+            while (usedPositions.Contains(nextAvailablePosition))
+            {
+                nextAvailablePosition++;
+            }
+
+            track.PlaylistPosition = nextAvailablePosition;
+            usedPositions.Add(track.PlaylistPosition);
+            nextAvailablePosition++;
         }
 
         _context.Playlists.Add(playlist);
