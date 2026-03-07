@@ -26,6 +26,53 @@ public sealed class FrameRenderService
     {
         Directory.CreateDirectory(framesDir);
 
+        await RenderFramesCoreAsync(
+            imagePath,
+            analysis,
+            width,
+            height,
+            seed,
+            async (frameIndex, framePixels) =>
+            {
+                var framePath = Path.Combine(framesDir, $"frame_{frameIndex + 1:000000}.png");
+                ImageUtils.SaveRgbaAsPng(framePath, width, height, framePixels);
+                await Task.CompletedTask;
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task RenderFramesToRawStreamAsync(
+        string imagePath,
+        AnalysisDocument analysis,
+        int width,
+        int height,
+        int seed,
+        Stream output,
+        CancellationToken cancellationToken)
+    {
+        await RenderFramesCoreAsync(
+            imagePath,
+            analysis,
+            width,
+            height,
+            seed,
+            async (_, framePixels) =>
+            {
+                await output.WriteAsync(framePixels, cancellationToken).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RenderFramesCoreAsync(
+        string imagePath,
+        AnalysisDocument analysis,
+        int width,
+        int height,
+        int seed,
+        Func<int, byte[], Task> onFrameAsync,
+        CancellationToken cancellationToken)
+    {
+
         var sourceImage = await ImageUtils
             .LoadImageAsync(_ffmpegPath, _ffprobePath, _runner, imagePath, cancellationToken)
             .ConfigureAwait(false);
@@ -96,9 +143,7 @@ public sealed class FrameRenderService
             DrawParticles(framePixels, width, height, particles, frame, frameIndex, seed);
             DrawEqualizer(framePixels, width, height, frame, smoothedBars);
             ApplyVignetteAndGrain(framePixels, width, height, frameIndex, seed);
-
-            var framePath = Path.Combine(framesDir, $"frame_{frameIndex + 1:000000}.png");
-            ImageUtils.SaveRgbaAsPng(framePath, width, height, framePixels);
+            await onFrameAsync(frameIndex, framePixels).ConfigureAwait(false);
 
             beatPunch *= 0.82;
         }

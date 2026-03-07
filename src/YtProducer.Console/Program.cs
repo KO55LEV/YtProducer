@@ -59,6 +59,16 @@ var commands = new Dictionary<string, Func<IServiceProvider, Task>>(StringCompar
         var ytService = scopedServices.GetRequiredService<YtService>();
         await ytService.RunGenerateMediaAsync(commandArgs);
     },
+    ["test-generate-video"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunTestGenerateVideoAsync(commandArgs);
+    },
+    ["test_generate_video"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunTestGenerateVideoAsync(commandArgs);
+    },
     ["generate_media"] = async scopedServices =>
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
