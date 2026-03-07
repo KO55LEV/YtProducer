@@ -12,6 +12,11 @@ function getEnergyColor(energyLevel?: number | null): string {
   return "#10b981";
 }
 
+function isMasterImageForPosition(fileName: string, position: number): boolean {
+  const escapedPosition = String(position).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escapedPosition}\\.[^.]+$`, "i").test(fileName);
+}
+
 export default function PlaylistDetail() {
   const { id } = useParams<{ id: string }>();
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
@@ -21,6 +26,13 @@ export default function PlaylistDetail() {
   const [error, setError] = useState<string | null>(null);
   const [imageIndexByPosition, setImageIndexByPosition] = useState<Record<number, number>>({});
   const [mediaViewByPosition, setMediaViewByPosition] = useState<Record<number, "video" | "image">>({});
+  const [showThumbnail, setShowThumbnail] = useState(false);
+  const [setBackgroundBusyByPosition, setSetBackgroundBusyByPosition] = useState<Record<number, boolean>>({});
+  const [moveImageBusyByPosition, setMoveImageBusyByPosition] = useState<Record<number, boolean>>({});
+  const [deleteThumbnailBusyByPosition, setDeleteThumbnailBusyByPosition] = useState<Record<number, boolean>>({});
+  const [moveAudioBusyByKey, setMoveAudioBusyByKey] = useState<Record<string, boolean>>({});
+  const [deleteAudioBusyByKey, setDeleteAudioBusyByKey] = useState<Record<string, boolean>>({});
+  const [lightboxState, setLightboxState] = useState<{ position: number; index: number } | null>(null);
 
   const resolveMediaUrl = useMemo(() => {
     return (url: string) => (url.startsWith("http") ? url : `${apiBaseUrl}${url}`);
@@ -50,6 +62,213 @@ export default function PlaylistDetail() {
 
     fetchPlaylist();
   }, [id]);
+
+  useEffect(() => {
+    if (!lightboxState) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setLightboxState(null);
+        return;
+      }
+
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        setLightboxState((prev) => {
+          if (!prev) {
+            return prev;
+          }
+
+          const media = mediaByPosition[prev.position];
+          const images = media?.images ?? [];
+          const thumbnailImages = images.filter((image) =>
+            /_thumbnail(?:_\d+)?\.[^.]+$/i.test(image.fileName)
+          );
+          const displayImages = showThumbnail ? thumbnailImages : images;
+          const count = displayImages.length;
+          if (count <= 1) {
+            return prev;
+          }
+
+          const safeIndex = ((prev.index % count) + count) % count;
+          const nextIndex =
+            event.key === "ArrowLeft"
+              ? (safeIndex - 1 + count) % count
+              : (safeIndex + 1) % count;
+
+          return { ...prev, index: nextIndex };
+        });
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxState, mediaByPosition, showThumbnail]);
+
+  async function reloadMedia(): Promise<void> {
+    if (!id) return;
+    try {
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/media`);
+      if (!response.ok) {
+        throw new Error(`Media request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as PlaylistMediaResponse;
+      const map: Record<number, PlaylistTrackMedia> = {};
+      const defaultView: Record<number, "video" | "image"> = {};
+      for (const track of data.tracks) {
+        map[track.playlistPosition] = track;
+        defaultView[track.playlistPosition] = track.videos.length > 0 ? "video" : "image";
+      }
+
+      setMediaByPosition(map);
+      setMediaViewByPosition((prev) => ({ ...defaultView, ...prev }));
+    } catch {
+      // Keep existing media state when refresh fails.
+    }
+  }
+
+  async function handleSetBackground(position: number, fileName: string): Promise<boolean> {
+    if (!id) return false;
+    if (isMasterImageForPosition(fileName, position)) {
+      return false;
+    }
+
+    try {
+      setSetBackgroundBusyByPosition((prev) => ({ ...prev, [position]: true }));
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/media/set-background`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playlistPosition: position,
+          fileName
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Set background failed with status ${response.status}`);
+      }
+
+      setImageIndexByPosition((prev) => ({ ...prev, [position]: 0 }));
+      await reloadMedia();
+      return true;
+    } catch {
+      // Keep UI stable and allow retry.
+      return false;
+    } finally {
+      setSetBackgroundBusyByPosition((prev) => ({ ...prev, [position]: false }));
+    }
+  }
+
+  async function handleMoveImage(position: number, fileName: string): Promise<boolean> {
+    if (!id) return false;
+
+    try {
+      setMoveImageBusyByPosition((prev) => ({ ...prev, [position]: true }));
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/media/move-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playlistPosition: position,
+          fileName
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Move image failed with status ${response.status}`);
+      }
+
+      setImageIndexByPosition((prev) => ({ ...prev, [position]: 0 }));
+      await reloadMedia();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setMoveImageBusyByPosition((prev) => ({ ...prev, [position]: false }));
+    }
+  }
+
+  async function handleDeleteThumbnail(position: number, fileName: string): Promise<boolean> {
+    if (!id) return false;
+
+    try {
+      setDeleteThumbnailBusyByPosition((prev) => ({ ...prev, [position]: true }));
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/media/delete-thumbnail`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playlistPosition: position,
+          fileName
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Delete thumbnail failed with status ${response.status}`);
+      }
+
+      setImageIndexByPosition((prev) => ({ ...prev, [position]: 0 }));
+      await reloadMedia();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setDeleteThumbnailBusyByPosition((prev) => ({ ...prev, [position]: false }));
+    }
+  }
+
+  async function handleMoveAudio(position: number, fileName: string): Promise<boolean> {
+    if (!id) return false;
+    const key = `${position}:${fileName}`;
+    try {
+      setMoveAudioBusyByKey((prev) => ({ ...prev, [key]: true }));
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/media/move-audio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playlistPosition: position,
+          fileName
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Move audio failed with status ${response.status}`);
+      }
+
+      await reloadMedia();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setMoveAudioBusyByKey((prev) => ({ ...prev, [key]: false }));
+    }
+  }
+
+  async function handleDeleteAudio(position: number, fileName: string): Promise<boolean> {
+    if (!id) return false;
+    const key = `${position}:${fileName}`;
+    try {
+      setDeleteAudioBusyByKey((prev) => ({ ...prev, [key]: true }));
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/media/delete-audio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playlistPosition: position,
+          fileName
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Delete audio failed with status ${response.status}`);
+      }
+
+      await reloadMedia();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setDeleteAudioBusyByKey((prev) => ({ ...prev, [key]: false }));
+    }
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -127,6 +346,16 @@ export default function PlaylistDetail() {
               <span>Published {new Date(playlist.publishedAtUtc).toLocaleDateString()}</span>
             )}
           </div>
+          <div className="playlist-toolbar">
+            <button
+              type="button"
+              className={`playlist-toggle ${showThumbnail ? "is-active" : ""}`}
+              onClick={() => setShowThumbnail((prev) => !prev)}
+              aria-pressed={showThumbnail}
+            >
+              Show Thumbnail
+            </button>
+          </div>
         </div>
       </div>
 
@@ -140,16 +369,30 @@ export default function PlaylistDetail() {
                   const media = mediaByPosition[track.playlistPosition];
                   const videos = media?.videos ?? [];
                   const images = media?.images ?? [];
-                  const audios = media?.audios ?? [];
+                  const thumbnailImages = images.filter((image) =>
+                    /_thumbnail(?:_\d+)?\.[^.]+$/i.test(image.fileName)
+                  );
+                  const displayImages = showThumbnail ? thumbnailImages : images;
                   const currentIndex = imageIndexByPosition[track.playlistPosition] ?? 0;
-                  const viewMode = mediaViewByPosition[track.playlistPosition] ?? (videos.length > 0 ? "video" : "image");
+                  const viewMode = showThumbnail
+                    ? "image"
+                    : mediaViewByPosition[track.playlistPosition] ??
+                      (videos.length > 0 ? "video" : "image");
+
+                  if (showThumbnail && displayImages.length === 0) {
+                    return (
+                      <div className="thumbnail-placeholder thumbnail-missing">
+                        <span className="thumbnail-missing-text">Thumbnail missing</span>
+                      </div>
+                    );
+                  }
 
                   if (videos.length > 0 && viewMode === "video") {
                     const videoUrl = resolveMediaUrl(videos[0].url);
                     return (
                       <div className="track-media-wrapper">
                         <video className="track-media track-media-video" src={videoUrl} controls />
-                        {images.length > 0 && (
+                        {displayImages.length > 0 && (
                           <button
                             type="button"
                             className="track-media-toggle"
@@ -167,13 +410,27 @@ export default function PlaylistDetail() {
                     );
                   }
 
-                  if (images.length > 0) {
-                    const safeIndex = currentIndex % images.length;
-                    const imageUrl = resolveMediaUrl(images[safeIndex].url);
+                  if (displayImages.length > 0) {
+                    const safeIndex = currentIndex % displayImages.length;
+                    const selectedImage = displayImages[safeIndex];
+                    const imageUrl = resolveMediaUrl(selectedImage.url);
+                    const isMaster = isMasterImageForPosition(selectedImage.fileName, track.playlistPosition);
+                    const isSetBackgroundBusy = setBackgroundBusyByPosition[track.playlistPosition] === true;
+                    const isDeleteThumbnailBusy = deleteThumbnailBusyByPosition[track.playlistPosition] === true;
                     return (
                       <div className="track-media-wrapper">
-                        <img className="track-media track-media-image" src={imageUrl} alt={track.title} />
-                        {videos.length > 0 && (
+                        <img
+                          className="track-media track-media-image"
+                          src={imageUrl}
+                          alt={track.title}
+                          onClick={() =>
+                            setLightboxState({
+                              position: track.playlistPosition,
+                              index: safeIndex
+                            })
+                          }
+                        />
+                        {!showThumbnail && videos.length > 0 && (
                           <button
                             type="button"
                             className="track-media-toggle"
@@ -187,7 +444,27 @@ export default function PlaylistDetail() {
                             Video
                           </button>
                         )}
-                        {images.length > 1 && (
+                        {!showThumbnail && (
+                          <button
+                            type="button"
+                            className="track-media-set-background"
+                            onClick={() => handleSetBackground(track.playlistPosition, selectedImage.fileName)}
+                            disabled={isMaster || isSetBackgroundBusy}
+                          >
+                            {isMaster ? "Master" : isSetBackgroundBusy ? "Setting..." : "Set Background"}
+                          </button>
+                        )}
+                        {showThumbnail && (
+                          <button
+                            type="button"
+                            className="track-media-delete-thumbnail"
+                            onClick={() => handleDeleteThumbnail(track.playlistPosition, selectedImage.fileName)}
+                            disabled={isDeleteThumbnailBusy}
+                          >
+                            {isDeleteThumbnailBusy ? "Deleting..." : "Delete Thumbnail"}
+                          </button>
+                        )}
+                        {displayImages.length > 1 && (
                           <div className="track-media-controls">
                             <button
                               type="button"
@@ -196,7 +473,7 @@ export default function PlaylistDetail() {
                                 setImageIndexByPosition((prev) => ({
                                   ...prev,
                                   [track.playlistPosition]:
-                                    (safeIndex - 1 + images.length) % images.length
+                                    (safeIndex - 1 + displayImages.length) % displayImages.length
                                 }))
                               }
                               aria-label="Previous image"
@@ -204,7 +481,7 @@ export default function PlaylistDetail() {
                               ←
                             </button>
                             <span className="track-media-counter">
-                              {safeIndex + 1}/{images.length}
+                              {safeIndex + 1}/{displayImages.length}
                             </span>
                             <button
                               type="button"
@@ -212,7 +489,7 @@ export default function PlaylistDetail() {
                               onClick={() =>
                                 setImageIndexByPosition((prev) => ({
                                   ...prev,
-                                  [track.playlistPosition]: (safeIndex + 1) % images.length
+                                  [track.playlistPosition]: (safeIndex + 1) % displayImages.length
                                 }))
                               }
                               aria-label="Next image"
@@ -231,9 +508,6 @@ export default function PlaylistDetail() {
                     </div>
                   );
                 })()}
-                {track.duration && (
-                  <span className="track-duration">{track.duration}</span>
-                )}
               </div>
               <div className="track-content">
                 <div className="track-position">#{track.playlistPosition}</div>
@@ -281,6 +555,10 @@ export default function PlaylistDetail() {
                           key={audio.fileName}
                           src={resolveMediaUrl(audio.url)}
                           label={audio.fileName}
+                          onMove={() => handleMoveAudio(track.playlistPosition, audio.fileName)}
+                          onDelete={() => handleDeleteAudio(track.playlistPosition, audio.fileName)}
+                          moveBusy={moveAudioBusyByKey[`${track.playlistPosition}:${audio.fileName}`] === true}
+                          deleteBusy={deleteAudioBusyByKey[`${track.playlistPosition}:${audio.fileName}`] === true}
                         />
                       ))}
                     </div>
@@ -310,6 +588,158 @@ export default function PlaylistDetail() {
           <p>YouTube upload progress and metadata will be displayed here.</p>
         </div>
       </div>
+
+      {lightboxState &&
+        (() => {
+          const media = mediaByPosition[lightboxState.position];
+          const images = media?.images ?? [];
+          const thumbnailImages = images.filter((image) =>
+            /_thumbnail(?:_\d+)?\.[^.]+$/i.test(image.fileName)
+          );
+          const displayImages = showThumbnail ? thumbnailImages : images;
+          if (displayImages.length === 0) {
+            return null;
+          }
+
+          const safeIndex = ((lightboxState.index % displayImages.length) + displayImages.length) % displayImages.length;
+          const selectedImage = displayImages[safeIndex];
+          const imageUrl = resolveMediaUrl(selectedImage.url);
+          const busy = setBackgroundBusyByPosition[lightboxState.position] === true;
+          const moveBusy = moveImageBusyByPosition[lightboxState.position] === true;
+          const deleteBusy = deleteThumbnailBusyByPosition[lightboxState.position] === true;
+          const isMaster = isMasterImageForPosition(selectedImage.fileName, lightboxState.position);
+
+          return (
+            <div
+              className="media-lightbox"
+              role="dialog"
+              aria-modal="true"
+              onClick={() => setLightboxState(null)}
+            >
+              <div className="media-lightbox-content" onClick={(event) => event.stopPropagation()}>
+                <button
+                  type="button"
+                  className="media-lightbox-close"
+                  onClick={() => setLightboxState(null)}
+                  aria-label="Close image preview"
+                >
+                  ×
+                </button>
+                <img
+                  className="media-lightbox-image"
+                  src={imageUrl}
+                  alt={`Track ${lightboxState.position}`}
+                  onClick={() => setLightboxState(null)}
+                />
+                <div className="media-lightbox-toolbar">
+                  <button
+                    type="button"
+                    className="media-lightbox-button"
+                    onClick={() =>
+                      setLightboxState((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              index: (safeIndex - 1 + displayImages.length) % displayImages.length
+                            }
+                          : prev
+                      )
+                    }
+                    disabled={displayImages.length <= 1}
+                  >
+                    ←
+                  </button>
+                  <span className="media-lightbox-counter">
+                    {safeIndex + 1}/{displayImages.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="media-lightbox-button"
+                    onClick={() =>
+                      setLightboxState((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              index: (safeIndex + 1) % displayImages.length
+                            }
+                          : prev
+                      )
+                    }
+                    disabled={displayImages.length <= 1}
+                  >
+                    →
+                  </button>
+                  {!showThumbnail && (
+                    <button
+                      type="button"
+                      className="media-lightbox-button media-lightbox-primary"
+                      onClick={async () => {
+                        const changed = await handleSetBackground(lightboxState.position, selectedImage.fileName);
+                        if (changed) {
+                          setLightboxState((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  index: 0
+                                }
+                              : prev
+                          );
+                        }
+                      }}
+                      disabled={isMaster || busy}
+                    >
+                      {isMaster ? "Master" : busy ? "Setting..." : "Set Background"}
+                    </button>
+                  )}
+                  {!showThumbnail && (
+                    <button
+                      type="button"
+                      className="media-lightbox-button"
+                      onClick={async () => {
+                        const moved = await handleMoveImage(lightboxState.position, selectedImage.fileName);
+                        if (moved) {
+                          setLightboxState((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  index: 0
+                                }
+                              : prev
+                          );
+                        }
+                      }}
+                      disabled={moveBusy}
+                    >
+                      {moveBusy ? "Moving..." : "Move"}
+                    </button>
+                  )}
+                  {showThumbnail && (
+                    <button
+                      type="button"
+                      className="media-lightbox-button"
+                      onClick={async () => {
+                        const deleted = await handleDeleteThumbnail(lightboxState.position, selectedImage.fileName);
+                        if (deleted) {
+                          setLightboxState((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  index: 0
+                                }
+                              : prev
+                          );
+                        }
+                      }}
+                      disabled={deleteBusy}
+                    >
+                      {deleteBusy ? "Deleting..." : "Delete Thumbnail"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }
@@ -321,17 +751,37 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-function TrackAudioPlayer({ src, label }: { src: string; label: string }) {
+function TrackAudioPlayer({
+  src,
+  label,
+  onMove,
+  onDelete,
+  moveBusy,
+  deleteBusy
+}: {
+  src: string;
+  label: string;
+  onMove: () => Promise<boolean>;
+  onDelete: () => Promise<boolean>;
+  moveBusy: boolean;
+  deleteBusy: boolean;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [seekValue, setSeekValue] = useState(0);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const handleTime = () => setCurrentTime(audio.currentTime);
+    const handleTime = () => {
+      if (!isSeeking) {
+        setCurrentTime(audio.currentTime);
+      }
+    };
     const handleLoaded = () => setDuration(audio.duration || 0);
     const handleEnded = () => setIsPlaying(false);
 
@@ -344,7 +794,7 @@ function TrackAudioPlayer({ src, label }: { src: string; label: string }) {
       audio.removeEventListener("loadedmetadata", handleLoaded);
       audio.removeEventListener("ended", handleEnded);
     };
-  }, []);
+  }, [isSeeking]);
 
   const togglePlay = async () => {
     const audio = audioRef.current;
@@ -364,9 +814,11 @@ function TrackAudioPlayer({ src, label }: { src: string; label: string }) {
     const nextTime = (value / 100) * audio.duration;
     audio.currentTime = nextTime;
     setCurrentTime(nextTime);
+    setSeekValue(value);
   };
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const displayedProgress = isSeeking ? seekValue : progress;
 
   return (
     <div className="track-audio-shell">
@@ -392,10 +844,44 @@ function TrackAudioPlayer({ src, label }: { src: string; label: string }) {
         min={0}
         max={100}
         step={0.1}
-        value={progress}
+        value={displayedProgress}
+        onPointerDown={() => {
+          setIsSeeking(true);
+          setSeekValue(progress);
+        }}
+        onPointerUp={() => setIsSeeking(false)}
+        onTouchStart={() => {
+          setIsSeeking(true);
+          setSeekValue(progress);
+        }}
+        onTouchEnd={() => setIsSeeking(false)}
+        onBlur={() => setIsSeeking(false)}
+        onInput={(event) => handleSeek(Number((event.target as HTMLInputElement).value))}
         onChange={(event) => handleSeek(Number(event.target.value))}
         aria-label={`Scrub ${label}`}
       />
+      <div className="track-audio-actions">
+        <button
+          type="button"
+          className="track-audio-action-btn"
+          onClick={() => {
+            void onMove();
+          }}
+          disabled={moveBusy || deleteBusy}
+        >
+          {moveBusy ? "Moving..." : "Move"}
+        </button>
+        <button
+          type="button"
+          className="track-audio-action-btn track-audio-action-danger"
+          onClick={() => {
+            void onDelete();
+          }}
+          disabled={deleteBusy || moveBusy}
+        >
+          {deleteBusy ? "Deleting..." : "Delete"}
+        </button>
+      </div>
     </div>
   );
 }

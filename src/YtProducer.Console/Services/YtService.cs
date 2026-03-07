@@ -21,7 +21,14 @@ public class YtService
 {
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
     private static readonly string[] AudioExtensions = [".mp3"];
-    private static readonly int[] YoutubePublishHoursUtc = [8, 14, 18];
+    private static readonly (int Hour, int Minute)[] YoutubePublishSlotsUtc =
+    [
+        (7, 30),
+        (11, 0),
+        (14, 30),
+        (18, 0),
+        (21, 30)
+    ];
     private const string MediaGenerationStateFileName = ".media-generation-state.json";
 
     private readonly YtProducerDbContext _context;
@@ -38,25 +45,67 @@ public class YtService
         _logger = logger;
     }
 
-    public async Task RunPlaylistInitAsync()
+    public async Task RunPlaylistInitAsync(string[] commandArgs)
     {
+        Guid? targetPlaylistId = null;
+        if (commandArgs.Length > 0)
+        {
+            if (!Guid.TryParse(commandArgs[0], out var parsedPlaylistId))
+            {
+                global::System.Console.WriteLine("Usage: playlist_init [playlistId]");
+                return;
+            }
+
+            targetPlaylistId = parsedPlaylistId;
+        }
+
         _logger.LogInformation("╔════════════════════════════════════════════════════╗");
         _logger.LogInformation("║       YtProducer Console - Playlist Pipeline        ║");
         _logger.LogInformation("╚════════════════════════════════════════════════════╝\n");
 
-        await PrintAllPlaylistsAsync();
-        _logger.LogInformation("");
-        await PrintAllYoutubePlaylistsAsync();
-        _logger.LogInformation("");
-        await RunPlaylistPipelineAsync();
+        if (!targetPlaylistId.HasValue)
+        {
+            await PrintAllPlaylistsAsync();
+            _logger.LogInformation("");
+            await PrintAllYoutubePlaylistsAsync();
+            _logger.LogInformation("");
+        }
+
+        await RunPlaylistPipelineAsync(targetPlaylistId);
 
         _logger.LogInformation("\n✓ Playlist pipeline completed!");
     }
 
-    public async Task PrintPlaylistListAsync()
+    public async Task PrintPlaylistListAsync(string[] commandArgs)
     {
-        var playlists = await _context.Playlists
+        if (commandArgs.Length > 1)
+        {
+            global::System.Console.WriteLine("Usage: playlists [status]");
+            return;
+        }
+
+        PlaylistStatus? statusFilter = null;
+        if (commandArgs.Length == 1)
+        {
+            if (!Enum.TryParse<PlaylistStatus>(commandArgs[0], ignoreCase: true, out var parsedStatus))
+            {
+                global::System.Console.WriteLine("Invalid status. Example: playlists draft");
+                return;
+            }
+
+            statusFilter = parsedStatus;
+        }
+
+        var playlistsQuery = _context.Playlists
             .AsNoTracking()
+            .AsQueryable();
+
+        if (statusFilter.HasValue)
+        {
+            playlistsQuery = playlistsQuery.Where(p => p.Status == statusFilter.Value);
+        }
+
+        var playlists = await playlistsQuery
             .OrderByDescending(p => p.CreatedAtUtc)
             .Select(p => new { p.Id, p.Title, p.CreatedAtUtc })
             .ToListAsync();
@@ -82,16 +131,28 @@ public class YtService
             .ThenByDescending(row => row.CreatedAtUtc)
             .ToList();
 
-        global::System.Console.WriteLine("playlist_id\ttitle\tis_folder_exists");
+        global::System.Console.WriteLine("playlist_id\tguid_id\ttitle\tis_folder_exists");
         foreach (var row in rows)
         {
             var title = string.IsNullOrWhiteSpace(row.Title) ? "-" : row.Title.Trim();
-            global::System.Console.WriteLine($"{row.Id}\t{title}\t{row.IsFolderExists.ToString().ToLowerInvariant()}");
+            global::System.Console.WriteLine($"{row.Id}\t{row.Id}\t{title}\t{row.IsFolderExists.ToString().ToLowerInvariant()}");
         }
     }
 
-    public async Task RunGenerateMediaAsync()
+    public async Task RunGenerateMediaAsync(string[] commandArgs)
     {
+        Guid? targetPlaylistId = null;
+        if (commandArgs.Length > 0)
+        {
+            if (!Guid.TryParse(commandArgs[0], out var parsedPlaylistId))
+            {
+                global::System.Console.WriteLine("Usage: generate-media [playlistId]");
+                return;
+            }
+
+            targetPlaylistId = parsedPlaylistId;
+        }
+
         var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(workingDirectory))
         {
@@ -118,11 +179,30 @@ public class YtService
             return;
         }
 
-        var playlists = await _context.Playlists
+        var playlistsQuery = _context.Playlists
             .AsNoTracking()
             .OrderByDescending(p => p.CreatedAtUtc)
             .Select(p => new { p.Id, p.Title })
-            .ToListAsync();
+            .AsQueryable();
+
+        if (targetPlaylistId.HasValue)
+        {
+            playlistsQuery = playlistsQuery.Where(p => p.Id == targetPlaylistId.Value);
+        }
+
+        var playlists = await playlistsQuery.ToListAsync();
+
+        if (playlists.Count == 0)
+        {
+            if (targetPlaylistId.HasValue)
+            {
+                global::System.Console.WriteLine($"Playlist not found: {targetPlaylistId.Value}");
+            }
+
+            global::System.Console.WriteLine(
+                "generate-media summary playlists_scanned=0 playlists_locked=0 candidates=0 scheduled=0 failed=0 skipped_completed=0 skipped_in_progress=0");
+            return;
+        }
 
         var summary = new MediaGenerationSummary();
         foreach (var playlist in playlists)
@@ -316,6 +396,117 @@ public class YtService
         await GenerateImageForPositionAsync(playlistId, position, modelOverride);
     }
 
+    public async Task RunGenerateMusicAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length < 2)
+        {
+            global::System.Console.WriteLine("Usage: generate-music <playlistId> <position>");
+            return;
+        }
+
+        if (!Guid.TryParse(commandArgs[0], out var playlistId))
+        {
+            global::System.Console.WriteLine("Invalid playlistId.");
+            return;
+        }
+
+        if (!int.TryParse(commandArgs[1], out var position) || position <= 0)
+        {
+            global::System.Console.WriteLine("Invalid position. Must be a positive integer.");
+            return;
+        }
+
+        await GenerateMusicForPositionAsync(playlistId, position);
+    }
+
+    public async Task RunGenerateAllImagesAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length < 1)
+        {
+            global::System.Console.WriteLine("Usage: generate-all-images <playlistId>");
+            return;
+        }
+
+        if (!Guid.TryParse(commandArgs[0], out var playlistId))
+        {
+            global::System.Console.WriteLine("Invalid playlistId.");
+            return;
+        }
+
+        var positions = await _context.Tracks
+            .AsNoTracking()
+            .Where(t => t.PlaylistId == playlistId)
+            .OrderBy(t => t.PlaylistPosition)
+            .Select(t => t.PlaylistPosition)
+            .Distinct()
+            .ToListAsync();
+
+        if (positions.Count == 0)
+        {
+            global::System.Console.WriteLine("No tracks found for playlist.");
+            return;
+        }
+
+        var allSucceeded = true;
+        foreach (var position in positions)
+        {
+            var success = await GenerateImageForPositionAsync(playlistId, position, "grok-imagine/text-to-image");
+            if (!success)
+            {
+                allSucceeded = false;
+            }
+        }
+
+        if (allSucceeded)
+        {
+            await SetPlaylistStatusAsync(playlistId, PlaylistStatus.ImagesGenerated);
+        }
+    }
+
+    public async Task RunGenerateAllMusicAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length < 1)
+        {
+            global::System.Console.WriteLine("Usage: generate-all-music <playlistId>");
+            return;
+        }
+
+        if (!Guid.TryParse(commandArgs[0], out var playlistId))
+        {
+            global::System.Console.WriteLine("Invalid playlistId.");
+            return;
+        }
+
+        var positions = await _context.Tracks
+            .AsNoTracking()
+            .Where(t => t.PlaylistId == playlistId)
+            .OrderBy(t => t.PlaylistPosition)
+            .Select(t => t.PlaylistPosition)
+            .Distinct()
+            .ToListAsync();
+
+        if (positions.Count == 0)
+        {
+            global::System.Console.WriteLine("No tracks found for playlist.");
+            return;
+        }
+
+        var allSucceeded = true;
+        foreach (var position in positions)
+        {
+            var success = await GenerateMusicForPositionAsync(playlistId, position);
+            if (!success)
+            {
+                allSucceeded = false;
+            }
+        }
+
+        if (allSucceeded)
+        {
+            await SetPlaylistStatusAsync(playlistId, PlaylistStatus.MusicGenerated);
+        }
+    }
+
     public async Task RunGenerateYoutubePlaylistAsync(string[] commandArgs)
     {
         if (commandArgs.Length < 1)
@@ -411,8 +602,51 @@ public class YtService
             return;
         }
 
-        await UploadYoutubeVideoAsync(playlistId, position);
-        await UploadYoutubeThumbnailAsync(playlistId, position);
+        await UploadYoutubeVideoWithThumbnailForPositionAsync(playlistId, position);
+    }
+
+    public async Task RunUploadYoutubeVideosAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length < 1)
+        {
+            global::System.Console.WriteLine("Usage: upload-youtube-videos <playlistId>");
+            return;
+        }
+
+        if (!Guid.TryParse(commandArgs[0], out var playlistId))
+        {
+            global::System.Console.WriteLine("Invalid playlistId.");
+            return;
+        }
+
+        var positions = await _context.Tracks
+            .AsNoTracking()
+            .Where(t => t.PlaylistId == playlistId)
+            .OrderBy(t => t.PlaylistPosition)
+            .Select(t => t.PlaylistPosition)
+            .Distinct()
+            .ToListAsync();
+
+        if (positions.Count == 0)
+        {
+            global::System.Console.WriteLine("No tracks found for playlist.");
+            return;
+        }
+
+        var allSucceeded = true;
+        foreach (var position in positions)
+        {
+            var success = await UploadYoutubeVideoWithThumbnailForPositionAsync(playlistId, position);
+            if (!success)
+            {
+                allSucceeded = false;
+            }
+        }
+
+        if (allSucceeded)
+        {
+            await SetPlaylistStatusAsync(playlistId, PlaylistStatus.OnYoutube);
+        }
     }
 
     public async Task RunAddYoutubeVideosToPlaylistAsync(string[] commandArgs)
@@ -462,9 +696,19 @@ public class YtService
                 return;
             }
 
+            var allSucceeded = true;
             foreach (var trackPosition in positions)
             {
-                await CreateYoutubeVideoThumbnailAsync(playlistId, trackPosition);
+                var success = await CreateYoutubeVideoThumbnailAsync(playlistId, trackPosition);
+                if (!success)
+                {
+                    allSucceeded = false;
+                }
+            }
+
+            if (allSucceeded)
+            {
+                await SetPlaylistStatusAsync(playlistId, PlaylistStatus.ThumbnailGenerated);
             }
 
             return;
@@ -479,10 +723,24 @@ public class YtService
         await CreateYoutubeVideoThumbnailAsync(playlistId, position);
     }
 
+    private async Task SetPlaylistStatusAsync(Guid playlistId, PlaylistStatus status)
+    {
+        var playlist = await _context.Playlists.FirstOrDefaultAsync(p => p.Id == playlistId);
+        if (playlist == null)
+        {
+            global::System.Console.WriteLine("Playlist not found.");
+            return;
+        }
+
+        playlist.Status = status;
+        playlist.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _context.SaveChangesAsync();
+        global::System.Console.WriteLine($"playlist status updated playlist={playlistId} status={status}");
+    }
+
     private async Task PrintAllPlaylistsAsync()
     {
         var playlists = await _context.Playlists
-            .AsNoTracking()
             .OrderByDescending(p => p.CreatedAtUtc)
             .ToListAsync();
 
@@ -537,7 +795,7 @@ public class YtService
         }
     }
 
-    private async Task RunPlaylistPipelineAsync()
+    private async Task RunPlaylistPipelineAsync(Guid? targetPlaylistId = null)
     {
         var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(workingDirectory))
@@ -549,13 +807,23 @@ public class YtService
         Directory.CreateDirectory(workingDirectory);
         _logger.LogInformation("Pipeline working directory: {WorkingDirectory}", workingDirectory);
 
-        var playlists = await _context.Playlists
-            .AsNoTracking()
+        var playlistsQuery = _context.Playlists
             .OrderByDescending(p => p.CreatedAtUtc)
-            .ToListAsync();
+            .AsQueryable();
+
+        if (targetPlaylistId.HasValue)
+        {
+            playlistsQuery = playlistsQuery.Where(p => p.Id == targetPlaylistId.Value);
+        }
+
+        var playlists = await playlistsQuery.ToListAsync();
 
         if (playlists.Count == 0)
         {
+            if (targetPlaylistId.HasValue)
+            {
+                _logger.LogWarning("Playlist not found: {PlaylistId}", targetPlaylistId.Value);
+            }
             _logger.LogInformation("No playlists found. Nothing to process.");
             return;
         }
@@ -627,7 +895,12 @@ public class YtService
                 folderName,
                 missingImages.Count,
                 missingTracks.Count);
+
+            playlist.Status = PlaylistStatus.FolderCreated;
+            playlist.UpdatedAtUtc = DateTimeOffset.UtcNow;
         }
+
+        await _context.SaveChangesAsync();
 
         _logger.LogInformation(
             "Pipeline summary | Processed: {Processed} | New folders: {Created} | Existing folders: {Existing} | Missing images: {MissingImages} | Missing tracks: {MissingTracks}",
@@ -643,20 +916,20 @@ public class YtService
         return playlistId.ToString();
     }
 
-    private async Task GenerateImageForPositionAsync(Guid playlistId, int position, string? modelOverride)
+    private async Task<bool> GenerateImageForPositionAsync(Guid playlistId, int position, string? modelOverride)
     {
         var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(workingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_PROJECT")
@@ -675,14 +948,14 @@ public class YtService
         if (playlist == null)
         {
             global::System.Console.WriteLine("Playlist not found.");
-            return;
+            return false;
         }
 
         var playlistFolderPath = Path.Combine(workingDirectory, GetPlaylistFolderName(playlist.Id));
         if (!Directory.Exists(playlistFolderPath))
         {
             global::System.Console.WriteLine($"Playlist folder not found: {playlistFolderPath}");
-            return;
+            return false;
         }
 
         var playlistMetadataPrompts = ParsePromptMetadata(playlist.Metadata);
@@ -693,7 +966,7 @@ public class YtService
         if (string.IsNullOrWhiteSpace(prompt))
         {
             global::System.Console.WriteLine("Image prompt is empty. Skipping.");
-            return;
+            return false;
         }
 
         var outputFilePath = GetNextImageOutputPath(playlistFolderPath, position);
@@ -710,13 +983,146 @@ public class YtService
         if (!result.Success)
         {
             global::System.Console.WriteLine($"image_generation failed playlist={playlistId} position={position} error={result.ErrorMessage}");
-            return;
+            return false;
         }
 
         await PersistTrackImagesAsync(playlist, track, position, prompt, model, aspectRatio, result);
 
         global::System.Console.WriteLine(
             $"image_generation complete playlist={playlistId} position={position} files={result.SavedFiles.Count}");
+        return true;
+    }
+
+    private async Task<bool> GenerateMusicForPositionAsync(Guid playlistId, int position)
+    {
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            global::System.Console.WriteLine("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
+            return false;
+        }
+
+        var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
+        {
+            global::System.Console.WriteLine("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY is not configured.");
+            return false;
+        }
+
+        var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_PROJECT")
+            ?? "OnlineTeamTools.MCP.KieAi/OnlineTeamTools.MCP.KieAi.csproj";
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .Include(p => p.Tracks)
+            .FirstOrDefaultAsync(p => p.Id == playlistId);
+        if (playlist == null)
+        {
+            global::System.Console.WriteLine("Playlist not found.");
+            return false;
+        }
+
+        var track = playlist.Tracks.FirstOrDefault(t => t.PlaylistPosition == position);
+        if (track == null)
+        {
+            global::System.Console.WriteLine("Track not found for position.");
+            return false;
+        }
+
+        var prompt = TryGetMetadataString(track.Metadata, "musicGenerationPrompt")
+            ?? TryGetMetadataString(playlist.Metadata, "musicGenerationPrompt");
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            global::System.Console.WriteLine("musicGenerationPrompt is empty. Skipping.");
+            return false;
+        }
+
+        var lyrics = TryGetMetadataString(track.Metadata, "lyrics") ?? string.Empty;
+        var title = track.YouTubeTitle ?? track.Title;
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            title = $"track-{position}";
+        }
+
+        var model = Environment.GetEnvironmentVariable("YT_PRODUCER_KIEAI_SUNO_MODEL") ?? "V5";
+        var vocalGender = Environment.GetEnvironmentVariable("YT_PRODUCER_KIEAI_SUNO_VOCAL_GENDER") ?? "m";
+        var personaModel = Environment.GetEnvironmentVariable("YT_PRODUCER_KIEAI_SUNO_PERSONA_MODEL") ?? "style_persona";
+        var callbackUrl = Environment.GetEnvironmentVariable("YT_PRODUCER_KIEAI_SUNO_CALLBACK_URL") ?? "playground";
+        var customMode = !string.Equals(Environment.GetEnvironmentVariable("YT_PRODUCER_KIEAI_SUNO_CUSTOM_MODE"), "false", StringComparison.OrdinalIgnoreCase);
+        var instrumental = !string.Equals(Environment.GetEnvironmentVariable("YT_PRODUCER_KIEAI_SUNO_INSTRUMENTAL"), "false", StringComparison.OrdinalIgnoreCase);
+        var audioWeightText = Environment.GetEnvironmentVariable("YT_PRODUCER_KIEAI_SUNO_AUDIO_WEIGHT");
+        var audioWeight = double.TryParse(audioWeightText, out var parsedAudioWeight) ? parsedAudioWeight : 0.65;
+
+        var playlistFolderPath = Path.Combine(workingDirectory, GetPlaylistFolderName(playlist.Id));
+        Directory.CreateDirectory(playlistFolderPath);
+
+        global::System.Console.WriteLine($"music_generation start playlist={playlistId} position={position}");
+        var result = await ExecuteMusicGenerationAsync(
+            mcpWorkingDirectory,
+            mcpProject,
+            playlistFolderPath,
+            title.Trim(),
+            prompt.Trim(),
+            lyrics.Trim(),
+            vocalGender.Trim(),
+            audioWeight,
+            personaModel.Trim(),
+            model.Trim(),
+            instrumental,
+            customMode,
+            callbackUrl.Trim());
+
+        if (!result.Success)
+        {
+            global::System.Console.WriteLine($"music_generation failed playlist={playlistId} position={position} error={result.ErrorMessage}");
+            return false;
+        }
+
+        var targetFiles = ResolveTargetMusicPaths(playlistFolderPath, position, result.SavedFiles.Count);
+        for (var i = 0; i < result.SavedFiles.Count; i++)
+        {
+            var saved = result.SavedFiles[i];
+            var targetFilePath = targetFiles[i];
+
+            try
+            {
+                var isSameAudioPath = string.Equals(saved.FilePath, targetFilePath, StringComparison.OrdinalIgnoreCase);
+                if (File.Exists(targetFilePath) && !isSameAudioPath)
+                {
+                    File.Delete(targetFilePath);
+                }
+
+                if (!isSameAudioPath)
+                {
+                    File.Move(saved.FilePath, targetFilePath, true);
+                }
+
+                var sourceJsonPath = Path.ChangeExtension(saved.FilePath, ".json");
+                var targetJsonPath = Path.ChangeExtension(targetFilePath, ".json");
+                var isSameJsonPath = string.Equals(sourceJsonPath, targetJsonPath, StringComparison.OrdinalIgnoreCase);
+                if (File.Exists(sourceJsonPath))
+                {
+                    if (File.Exists(targetJsonPath) && !isSameJsonPath)
+                    {
+                        File.Delete(targetJsonPath);
+                    }
+
+                    if (!isSameJsonPath)
+                    {
+                        File.Move(sourceJsonPath, targetJsonPath, true);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                global::System.Console.WriteLine($"music_generation failed playlist={playlistId} position={position} error=file rename failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        global::System.Console.WriteLine(
+            $"music_generation complete playlist={playlistId} position={position} files={result.SavedFiles.Count}");
+        return true;
     }
 
     private async Task GenerateYoutubePlaylistAsync(Guid playlistId, string? privacyOverride = null)
@@ -785,20 +1191,31 @@ public class YtService
         global::System.Console.WriteLine($"youtube playlist created: {result.PlaylistId}");
     }
 
-    private async Task UploadYoutubeVideoAsync(Guid playlistId, int position)
+    private async Task<bool> UploadYoutubeVideoWithThumbnailForPositionAsync(Guid playlistId, int position)
+    {
+        var videoUploaded = await UploadYoutubeVideoAsync(playlistId, position);
+        if (!videoUploaded)
+        {
+            return false;
+        }
+
+        return await UploadYoutubeThumbnailAsync(playlistId, position);
+    }
+
+    private async Task<bool> UploadYoutubeVideoAsync(Guid playlistId, int position)
     {
         var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(workingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_PROJECT")
@@ -813,14 +1230,14 @@ public class YtService
         if (playlist == null)
         {
             global::System.Console.WriteLine("Playlist not found.");
-            return;
+            return false;
         }
 
         var track = playlist.Tracks.FirstOrDefault(t => t.PlaylistPosition == position);
         if (track == null)
         {
             global::System.Console.WriteLine("Track not found for position.");
-            return;
+            return false;
         }
 
         var existing = await _context.Set<TrackOnYoutube>()
@@ -829,7 +1246,7 @@ public class YtService
         if (existing != null)
         {
             global::System.Console.WriteLine($"Track already uploaded: {existing.VideoId}");
-            return;
+            return true;
         }
 
         var playlistFolderPath = Path.Combine(workingDirectory, GetPlaylistFolderName(playlistId));
@@ -837,7 +1254,7 @@ public class YtService
         if (videoPath == null)
         {
             global::System.Console.WriteLine($"Video file not found for position {position}.");
-            return;
+            return false;
         }
 
         var title = track.YouTubeTitle ?? track.Title;
@@ -859,7 +1276,7 @@ public class YtService
         if (!result.Success || string.IsNullOrWhiteSpace(result.VideoId))
         {
             global::System.Console.WriteLine($"youtube.upload_video failed: {result.ErrorMessage}");
-            return;
+            return false;
         }
 
         var record = new TrackOnYoutube
@@ -885,22 +1302,23 @@ public class YtService
         await _context.SaveChangesAsync();
 
         global::System.Console.WriteLine($"youtube upload complete: {result.VideoId} scheduled_at_utc={publishAt:yyyy-MM-ddTHH:mm:ssZ}");
+        return true;
     }
 
-    private async Task UploadYoutubeThumbnailAsync(Guid playlistId, int position)
+    private async Task<bool> UploadYoutubeThumbnailAsync(Guid playlistId, int position)
     {
         var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(workingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_PROJECT")
@@ -913,7 +1331,7 @@ public class YtService
         if (!Directory.Exists(playlistFolderPath))
         {
             global::System.Console.WriteLine($"Playlist folder not found: {playlistFolderPath}");
-            return;
+            return false;
         }
 
         var imagePath = ResolveYoutubeThumbnailPathForPosition(playlistFolderPath, position)
@@ -921,14 +1339,14 @@ public class YtService
         if (imagePath == null)
         {
             global::System.Console.WriteLine($"Image file not found for position {position}.");
-            return;
+            return false;
         }
 
         var fileInfo = new FileInfo(imagePath);
         if (fileInfo.Length > 2L * 1024 * 1024 * 1024)
         {
             global::System.Console.WriteLine("Thumbnail file exceeds 2GB limit.");
-            return;
+            return false;
         }
 
         var track = await _context.Tracks
@@ -937,7 +1355,7 @@ public class YtService
         if (track == null)
         {
             global::System.Console.WriteLine("Track not found for position.");
-            return;
+            return false;
         }
 
         var youtubeRecord = await _context.Set<TrackOnYoutube>()
@@ -946,7 +1364,7 @@ public class YtService
         if (youtubeRecord == null || string.IsNullOrWhiteSpace(youtubeRecord.VideoId))
         {
             global::System.Console.WriteLine("No YouTube video record found for this track. Upload video first.");
-            return;
+            return false;
         }
 
         var result = await ExecuteYoutubeUploadThumbnailAsync(
@@ -959,10 +1377,11 @@ public class YtService
         if (!result.Success)
         {
             global::System.Console.WriteLine($"youtube.upload_thumbnail failed: {result.ErrorMessage}");
-            return;
+            return false;
         }
 
         global::System.Console.WriteLine($"youtube thumbnail uploaded: {youtubeRecord.VideoId}");
+        return true;
     }
 
     private async Task AddYoutubeVideosToPlaylistAsync(Guid playlistId)
@@ -1041,20 +1460,20 @@ public class YtService
             $"youtube playlist add complete: playlist_id={youtubePlaylistId} added={result.AddedCount}");
     }
 
-    private async Task CreateYoutubeVideoThumbnailAsync(Guid playlistId, int position)
+    private async Task<bool> CreateYoutubeVideoThumbnailAsync(Guid playlistId, int position)
     {
         var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(workingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpMediaWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_MEDIA_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(mcpMediaWorkingDirectory))
         {
             global::System.Console.WriteLine("YT_PRODUCER_MCP_MEDIA_WORKING_DIRECTORY is not configured.");
-            return;
+            return false;
         }
 
         var mcpMediaProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_MEDIA_PROJECT")
@@ -1068,7 +1487,7 @@ public class YtService
         if (playlist == null)
         {
             global::System.Console.WriteLine("Playlist not found.");
-            return;
+            return false;
         }
 
         var track = await _context.Tracks
@@ -1077,21 +1496,21 @@ public class YtService
         if (track == null)
         {
             global::System.Console.WriteLine("Track not found for position.");
-            return;
+            return false;
         }
 
         var playlistFolderPath = Path.Combine(workingDirectory, GetPlaylistFolderName(playlistId));
         if (!Directory.Exists(playlistFolderPath))
         {
             global::System.Console.WriteLine($"Playlist folder not found: {playlistFolderPath}");
-            return;
+            return false;
         }
 
         var imagePath = ResolveImagePathForPosition(playlistFolderPath, position);
         if (imagePath == null)
         {
             global::System.Console.WriteLine($"Image file not found for position {position}.");
-            return;
+            return false;
         }
 
         var extension = Path.GetExtension(imagePath);
@@ -1111,7 +1530,7 @@ public class YtService
             {
                 global::System.Console.WriteLine(
                     $"track thumbnail generation failed playlist={playlistId} position={position} error=failed to delete existing thumbnail: {ex.Message}");
-                return;
+                return false;
             }
         }
 
@@ -1147,11 +1566,12 @@ public class YtService
         {
             global::System.Console.WriteLine(
                 $"track thumbnail generation failed playlist={playlistId} position={position} error={result.ErrorMessage}");
-            return;
+            return false;
         }
 
         global::System.Console.WriteLine(
             $"track thumbnail generated playlist={playlistId} position={position} file={result.OutputPath ?? outputPath}");
+        return true;
     }
 
     private static string ResolveThumbnailHeadline(Track track, Playlist playlist, string? headlineOverride)
@@ -1376,6 +1796,166 @@ public class YtService
         };
 
         return JsonSerializer.Serialize(payload);
+    }
+
+    private static string BuildMusicGenerationRequestJson(
+        string title,
+        string style,
+        string prompt,
+        string vocalGender,
+        double audioWeight,
+        string personaModel,
+        string outputFilesPath,
+        string model,
+        bool instrumental,
+        bool customMode,
+        string callbackUrl)
+    {
+        var payload = new
+        {
+            jsonrpc = "2.0",
+            id = 16,
+            method = "tools/call",
+            @params = new
+            {
+                name = "suno_generate_music",
+                arguments = new
+                {
+                    title,
+                    style,
+                    prompt,
+                    vocalGender,
+                    audioWeight,
+                    personaModel,
+                    outputFilesPath,
+                    model,
+                    instrumental,
+                    customMode,
+                    callBackUrl = callbackUrl
+                }
+            }
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private async Task<MusicGenerationExecutionResult> ExecuteMusicGenerationAsync(
+        string mcpWorkingDirectory,
+        string mcpProject,
+        string outputFilesPath,
+        string title,
+        string style,
+        string prompt,
+        string vocalGender,
+        double audioWeight,
+        string personaModel,
+        string model,
+        bool instrumental,
+        bool customMode,
+        string callbackUrl)
+    {
+        try
+        {
+            var requestJson = BuildMusicGenerationRequestJson(
+                title,
+                style,
+                prompt,
+                vocalGender,
+                audioWeight,
+                personaModel,
+                outputFilesPath,
+                model,
+                instrumental,
+                customMode,
+                callbackUrl);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"run --project \"{mcpProject}\"",
+                WorkingDirectory = mcpWorkingDirectory,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            await process.StandardInput.WriteLineAsync(requestJson);
+            process.StandardInput.Close();
+            var stdOut = await process.StandardOutput.ReadToEndAsync();
+            var stdErr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                var error = string.IsNullOrWhiteSpace(stdErr) ? $"MCP process exit code {process.ExitCode}" : stdErr.Trim();
+                return MusicGenerationExecutionResult.Fail(error);
+            }
+
+            var jsonLine = TryExtractJsonRpcLine(stdOut);
+            if (string.IsNullOrWhiteSpace(jsonLine))
+            {
+                return MusicGenerationExecutionResult.Fail("MCP response did not contain JSON-RPC payload.");
+            }
+
+            using var responseDoc = JsonDocument.Parse(jsonLine);
+            var root = responseDoc.RootElement;
+            if (root.TryGetProperty("error", out var errorNode))
+            {
+                return MusicGenerationExecutionResult.Fail(errorNode.GetRawText());
+            }
+
+            JsonElement resultNode = default;
+            if (root.TryGetProperty("result", out var directResult))
+            {
+                resultNode = directResult;
+                if (directResult.ValueKind == JsonValueKind.Object &&
+                    directResult.TryGetProperty("data", out var dataResult) &&
+                    dataResult.ValueKind == JsonValueKind.Object)
+                {
+                    resultNode = dataResult;
+                }
+            }
+
+            var savedFiles = new List<SavedAudioArtifact>();
+            if (resultNode.ValueKind == JsonValueKind.Object &&
+                resultNode.TryGetProperty("downloadedFiles", out var downloadedFilesNode) &&
+                downloadedFilesNode.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in downloadedFilesNode.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var filePath = TryGetStringProperty(item, "filePath");
+                    if (string.IsNullOrWhiteSpace(filePath))
+                    {
+                        continue;
+                    }
+
+                    savedFiles.Add(new SavedAudioArtifact(
+                        filePath,
+                        Path.GetFileName(filePath),
+                        TryGetStringProperty(item, "sourceUrl")));
+                }
+            }
+
+            if (savedFiles.Count == 0)
+            {
+                return MusicGenerationExecutionResult.Fail("No downloaded audio files returned by MCP.");
+            }
+
+            return MusicGenerationExecutionResult.Ok(savedFiles);
+        }
+        catch (Exception ex)
+        {
+            return MusicGenerationExecutionResult.Fail(ex.Message);
+        }
     }
 
     private async Task<ImageGenerationExecutionResult> ExecuteImageGenerationAsync(
@@ -2267,7 +2847,7 @@ public class YtService
         state = new YoutubeLastPublishedDate
         {
             Id = 1,
-            LastPublishedDate = new DateTimeOffset(2026, 3, 8, 8, 0, 0, TimeSpan.Zero),
+            LastPublishedDate = new DateTimeOffset(2026, 3, 8, 7, 30, 0, TimeSpan.Zero),
             VideoId = null
         };
         _context.Add(state);
@@ -2280,9 +2860,9 @@ public class YtService
         var utc = lastPublishedDate.ToUniversalTime();
         var date = utc.Date;
 
-        foreach (var hour in YoutubePublishHoursUtc.OrderBy(h => h))
+        foreach (var slot in YoutubePublishSlotsUtc.OrderBy(s => s.Hour).ThenBy(s => s.Minute))
         {
-            var candidate = new DateTimeOffset(date.Year, date.Month, date.Day, hour, 0, 0, TimeSpan.Zero);
+            var candidate = new DateTimeOffset(date.Year, date.Month, date.Day, slot.Hour, slot.Minute, 0, TimeSpan.Zero);
             if (candidate > utc)
             {
                 return candidate;
@@ -2290,8 +2870,11 @@ public class YtService
         }
 
         var nextDay = date.AddDays(1);
-        var firstHour = YoutubePublishHoursUtc.Min();
-        return new DateTimeOffset(nextDay.Year, nextDay.Month, nextDay.Day, firstHour, 0, 0, TimeSpan.Zero);
+        var firstSlot = YoutubePublishSlotsUtc
+            .OrderBy(s => s.Hour)
+            .ThenBy(s => s.Minute)
+            .First();
+        return new DateTimeOffset(nextDay.Year, nextDay.Month, nextDay.Day, firstSlot.Hour, firstSlot.Minute, 0, TimeSpan.Zero);
     }
 
     private static string BuildVisualizerRequestJsonWithDirs(
@@ -2442,6 +3025,18 @@ public class YtService
             .ToList();
 
         return matches.FirstOrDefault();
+    }
+
+    private static List<string> ResolveTargetMusicPaths(string playlistFolderPath, int position, int count)
+    {
+        var targets = new List<string>();
+        for (var i = 1; i <= count; i++)
+        {
+            var fileName = i == 1 ? $"{position}.mp3" : $"{position}_{i}.mp3";
+            targets.Add(Path.Combine(playlistFolderPath, fileName));
+        }
+
+        return targets;
     }
 
     private static string? ResolveYoutubeThumbnailPathForPosition(string playlistFolderPath, int position)
@@ -3178,6 +3773,14 @@ public class YtService
     {
         public static ImageGenerationExecutionResult Ok(IReadOnlyList<SavedImageArtifact> savedFiles) => new(true, savedFiles, null);
         public static ImageGenerationExecutionResult Fail(string errorMessage) => new(false, Array.Empty<SavedImageArtifact>(), errorMessage);
+    }
+
+    private sealed record SavedAudioArtifact(string FilePath, string FileName, string? SourceUrl);
+
+    private sealed record MusicGenerationExecutionResult(bool Success, IReadOnlyList<SavedAudioArtifact> SavedFiles, string? ErrorMessage)
+    {
+        public static MusicGenerationExecutionResult Ok(IReadOnlyList<SavedAudioArtifact> savedFiles) => new(true, savedFiles, null);
+        public static MusicGenerationExecutionResult Fail(string errorMessage) => new(false, Array.Empty<SavedAudioArtifact>(), errorMessage);
     }
 
     private sealed record YoutubePlaylistCreateResult(bool Success, string? PlaylistId, string? ErrorMessage)

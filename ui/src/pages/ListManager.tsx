@@ -12,6 +12,16 @@ function statusClassName(status: string): string {
       return "badge badge-primary";
     case "failed":
       return "badge badge-error";
+    case "foldercreated":
+      return "badge badge-foldercreated";
+    case "imagesgenerated":
+      return "badge badge-imagesgenerated";
+    case "musicgenerated":
+      return "badge badge-musicgenerated";
+    case "thumbnailgenerated":
+      return "badge badge-thumbnailgenerated";
+    case "onyoutube":
+      return "badge badge-onyoutube";
     default:
       return "badge badge-secondary";
   }

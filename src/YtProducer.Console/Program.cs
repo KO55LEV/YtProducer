@@ -42,27 +42,27 @@ var commands = new Dictionary<string, Func<IServiceProvider, Task>>(StringCompar
     ["playlist_init"] = async scopedServices =>
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
-        await ytService.RunPlaylistInitAsync();
+        await ytService.RunPlaylistInitAsync(commandArgs);
     },
     ["playlist"] = async scopedServices =>
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
-        await ytService.PrintPlaylistListAsync();
+        await ytService.PrintPlaylistListAsync(commandArgs);
     },
     ["playlists"] = async scopedServices =>
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
-        await ytService.PrintPlaylistListAsync();
+        await ytService.PrintPlaylistListAsync(commandArgs);
     },
     ["generate-media"] = async scopedServices =>
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
-        await ytService.RunGenerateMediaAsync();
+        await ytService.RunGenerateMediaAsync(commandArgs);
     },
     ["generate_media"] = async scopedServices =>
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
-        await ytService.RunGenerateMediaAsync();
+        await ytService.RunGenerateMediaAsync(commandArgs);
     },
     ["generate-image"] = async scopedServices =>
     {
@@ -73,6 +73,36 @@ var commands = new Dictionary<string, Func<IServiceProvider, Task>>(StringCompar
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
         await ytService.RunGenerateImageAsync(commandArgs);
+    },
+    ["generate-music"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunGenerateMusicAsync(commandArgs);
+    },
+    ["generate_music"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunGenerateMusicAsync(commandArgs);
+    },
+    ["generate-all-images"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunGenerateAllImagesAsync(commandArgs);
+    },
+    ["generate_all_images"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunGenerateAllImagesAsync(commandArgs);
+    },
+    ["generate-all-music"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunGenerateAllMusicAsync(commandArgs);
+    },
+    ["generate_all_music"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunGenerateAllMusicAsync(commandArgs);
     },
     ["generate-youtube-playlist"] = async scopedServices =>
     {
@@ -113,6 +143,16 @@ var commands = new Dictionary<string, Func<IServiceProvider, Task>>(StringCompar
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
         await ytService.RunUploadYoutubeVideoWithThumbnailAsync(commandArgs);
+    },
+    ["upload-youtube-videos"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunUploadYoutubeVideosAsync(commandArgs);
+    },
+    ["upload_youtube_videos"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunUploadYoutubeVideosAsync(commandArgs);
     },
     ["add-youtube-videos-to-playlist"] = async scopedServices =>
     {

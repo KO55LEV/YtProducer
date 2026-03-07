@@ -1,10 +1,10 @@
 using YtProducer.Contracts.Playlists;
 using YtProducer.Contracts.Tracks;
-using YtProducer.Contracts.Tracks;
 using YtProducer.Domain.Entities;
 using YtProducer.Domain.Enums;
 using YtProducer.Infrastructure.Services;
 using YtProducer.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.StaticFiles;
 using System.Text.RegularExpressions;
 
@@ -32,6 +32,36 @@ public static class PlaylistEndpoints
         group.MapGet("/{id:guid}/media", GetPlaylistMediaAsync)
             .WithName("GetPlaylistMedia")
             .Produces<PlaylistMediaResponse>(StatusCodes.Status200OK);
+
+        group.MapPost("/{id:guid}/media/set-background", SetPlaylistTrackBackgroundAsync)
+            .WithName("SetPlaylistTrackBackground")
+            .Produces<SetPlaylistTrackBackgroundResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/media/move-image", MovePlaylistTrackImageAsync)
+            .WithName("MovePlaylistTrackImage")
+            .Produces<MovePlaylistTrackImageResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/media/delete-thumbnail", DeletePlaylistTrackThumbnailAsync)
+            .WithName("DeletePlaylistTrackThumbnail")
+            .Produces<DeletePlaylistTrackThumbnailResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/media/move-audio", MovePlaylistTrackAudioAsync)
+            .WithName("MovePlaylistTrackAudio")
+            .Produces<MovePlaylistTrackAudioResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/media/delete-audio", DeletePlaylistTrackAudioAsync)
+            .WithName("DeletePlaylistTrackAudio")
+            .Produces<DeletePlaylistTrackAudioResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/{id:guid}/media/{*relativePath}", GetPlaylistMediaFileAsync)
             .WithName("GetPlaylistMediaFile");
@@ -258,6 +288,544 @@ public static class PlaylistEndpoints
         return Results.File(candidatePath, contentType);
     }
 
+    private static IResult SetPlaylistTrackBackgroundAsync(
+        Guid id,
+        SetPlaylistTrackBackgroundRequest request,
+        IConfiguration configuration)
+    {
+        if (request.PlaylistPosition <= 0 || string.IsNullOrWhiteSpace(request.FileName))
+        {
+            return Results.BadRequest();
+        }
+
+        var fileName = Path.GetFileName(request.FileName);
+        if (string.IsNullOrWhiteSpace(fileName) || !string.Equals(fileName, request.FileName, StringComparison.Ordinal))
+        {
+            return Results.BadRequest();
+        }
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return Results.NotFound();
+        }
+
+        var playlistRoot = Path.Combine(workingDirectory, id.ToString());
+        if (!Directory.Exists(playlistRoot))
+        {
+            return Results.NotFound();
+        }
+
+        var sourcePath = Path.Combine(playlistRoot, fileName);
+        if (!System.IO.File.Exists(sourcePath))
+        {
+            return Results.NotFound();
+        }
+
+        var sourceExtension = Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(sourceExtension))
+        {
+            return Results.BadRequest();
+        }
+
+        var allowedImageExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+        if (!allowedImageExtensions.Contains(sourceExtension, StringComparer.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var selectedMatch = Regex.Match(
+            baseName,
+            "^(?<pos>\\d+)(?:_(?<variant>\\d+))?$",
+            RegexOptions.CultureInvariant);
+        if (!selectedMatch.Success || !int.TryParse(selectedMatch.Groups["pos"].Value, out var selectedPosition))
+        {
+            return Results.BadRequest();
+        }
+
+        if (selectedPosition != request.PlaylistPosition)
+        {
+            return Results.BadRequest();
+        }
+
+        if (!selectedMatch.Groups["variant"].Success)
+        {
+            return Results.Ok(new SetPlaylistTrackBackgroundResponse(
+                id,
+                request.PlaylistPosition,
+                fileName,
+                false));
+        }
+
+        var masterName = $"{request.PlaylistPosition}{sourceExtension.ToLowerInvariant()}";
+        var masterPath = Path.Combine(playlistRoot, masterName);
+        var sourceFullPath = Path.GetFullPath(sourcePath);
+        var masterFullPath = Path.GetFullPath(masterPath);
+        var rootFullPath = Path.GetFullPath(playlistRoot);
+        if (!sourceFullPath.StartsWith(rootFullPath, StringComparison.OrdinalIgnoreCase)
+            || !masterFullPath.StartsWith(rootFullPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var tempName = $"{request.PlaylistPosition}_swap_{Guid.NewGuid():N}{sourceExtension.ToLowerInvariant()}";
+        var tempPath = Path.Combine(playlistRoot, tempName);
+
+        try
+        {
+            System.IO.File.Move(sourcePath, tempPath);
+            if (System.IO.File.Exists(masterPath))
+            {
+                System.IO.File.Move(masterPath, sourcePath);
+            }
+            System.IO.File.Move(tempPath, masterPath);
+        }
+        catch
+        {
+            try
+            {
+                if (System.IO.File.Exists(tempPath) && !System.IO.File.Exists(sourcePath))
+                {
+                    System.IO.File.Move(tempPath, sourcePath);
+                }
+            }
+            catch
+            {
+                // Best effort rollback.
+            }
+
+            return Results.BadRequest();
+        }
+
+        return Results.Ok(new SetPlaylistTrackBackgroundResponse(
+            id,
+            request.PlaylistPosition,
+            masterName,
+            true));
+    }
+
+    private static IResult MovePlaylistTrackImageAsync(
+        Guid id,
+        MovePlaylistTrackImageRequest request,
+        IConfiguration configuration)
+    {
+        if (request.PlaylistPosition <= 0 || string.IsNullOrWhiteSpace(request.FileName))
+        {
+            return Results.BadRequest();
+        }
+
+        var fileName = Path.GetFileName(request.FileName);
+        if (string.IsNullOrWhiteSpace(fileName) || !string.Equals(fileName, request.FileName, StringComparison.Ordinal))
+        {
+            return Results.BadRequest();
+        }
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return Results.NotFound();
+        }
+
+        var playlistRoot = Path.Combine(workingDirectory, id.ToString());
+        if (!Directory.Exists(playlistRoot))
+        {
+            return Results.NotFound();
+        }
+
+        var sourcePath = Path.Combine(playlistRoot, fileName);
+        if (!System.IO.File.Exists(sourcePath))
+        {
+            return Results.NotFound();
+        }
+
+        var sourceExtension = Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(sourceExtension))
+        {
+            return Results.BadRequest();
+        }
+
+        var allowedImageExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+        if (!allowedImageExtensions.Contains(sourceExtension, StringComparer.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var selectedMatch = Regex.Match(
+            baseName,
+            "^(?<pos>\\d+)(?:_(?<variant>\\d+))?$",
+            RegexOptions.CultureInvariant);
+        if (!selectedMatch.Success || !int.TryParse(selectedMatch.Groups["pos"].Value, out var selectedPosition))
+        {
+            return Results.BadRequest();
+        }
+
+        if (selectedPosition != request.PlaylistPosition)
+        {
+            return Results.BadRequest();
+        }
+
+        var fullPlaylistRoot = Path.GetFullPath(playlistRoot);
+        var fullSourcePath = Path.GetFullPath(sourcePath);
+        if (!fullSourcePath.StartsWith(fullPlaylistRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var tmpPlaylistPath = Path.Combine(workingDirectory, "tmp-playlist");
+        Directory.CreateDirectory(tmpPlaylistPath);
+
+        var existingNumbers = Directory.EnumerateFiles(tmpPlaylistPath)
+            .Select(Path.GetFileNameWithoutExtension)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => int.TryParse(name, out var parsed) ? parsed : 0)
+            .Where(value => value > 0)
+            .ToList();
+        var nextNumber = existingNumbers.Count == 0 ? 1 : existingNumbers.Max() + 1;
+        var targetFileName = $"{nextNumber}{sourceExtension.ToLowerInvariant()}";
+        var targetPath = Path.Combine(tmpPlaylistPath, targetFileName);
+
+        try
+        {
+            System.IO.File.Move(sourcePath, targetPath, false);
+        }
+        catch
+        {
+            return Results.BadRequest();
+        }
+
+        return Results.Ok(new MovePlaylistTrackImageResponse(
+            id,
+            request.PlaylistPosition,
+            fileName,
+            targetFileName,
+            Path.Combine("tmp-playlist", targetFileName).Replace("\\", "/")));
+    }
+
+    private static IResult DeletePlaylistTrackThumbnailAsync(
+        Guid id,
+        DeletePlaylistTrackThumbnailRequest request,
+        IConfiguration configuration)
+    {
+        if (request.PlaylistPosition <= 0 || string.IsNullOrWhiteSpace(request.FileName))
+        {
+            return Results.BadRequest();
+        }
+
+        var fileName = Path.GetFileName(request.FileName);
+        if (string.IsNullOrWhiteSpace(fileName) || !string.Equals(fileName, request.FileName, StringComparison.Ordinal))
+        {
+            return Results.BadRequest();
+        }
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return Results.NotFound();
+        }
+
+        var playlistRoot = Path.Combine(workingDirectory, id.ToString());
+        if (!Directory.Exists(playlistRoot))
+        {
+            return Results.NotFound();
+        }
+
+        var sourcePath = Path.Combine(playlistRoot, fileName);
+        if (!System.IO.File.Exists(sourcePath))
+        {
+            return Results.NotFound();
+        }
+
+        var sourceExtension = Path.GetExtension(fileName);
+        var allowedImageExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+        if (string.IsNullOrWhiteSpace(sourceExtension)
+            || !allowedImageExtensions.Contains(sourceExtension, StringComparer.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var match = Regex.Match(
+            baseName,
+            "^(?<pos>\\d+)_thumbnail(?:_(?<variant>\\d+))?$",
+            RegexOptions.CultureInvariant);
+        if (!match.Success || !int.TryParse(match.Groups["pos"].Value, out var parsedPosition))
+        {
+            return Results.BadRequest();
+        }
+
+        if (parsedPosition != request.PlaylistPosition)
+        {
+            return Results.BadRequest();
+        }
+
+        var fullPlaylistRoot = Path.GetFullPath(playlistRoot);
+        var fullSourcePath = Path.GetFullPath(sourcePath);
+        if (!fullSourcePath.StartsWith(fullPlaylistRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        try
+        {
+            System.IO.File.Delete(sourcePath);
+        }
+        catch
+        {
+            return Results.BadRequest();
+        }
+
+        return Results.Ok(new DeletePlaylistTrackThumbnailResponse(
+            id,
+            request.PlaylistPosition,
+            fileName,
+            true));
+    }
+
+    private static IResult MovePlaylistTrackAudioAsync(
+        Guid id,
+        MovePlaylistTrackAudioRequest request,
+        IConfiguration configuration)
+    {
+        if (request.PlaylistPosition <= 0 || string.IsNullOrWhiteSpace(request.FileName))
+        {
+            return Results.BadRequest();
+        }
+
+        var fileName = Path.GetFileName(request.FileName);
+        if (string.IsNullOrWhiteSpace(fileName) || !string.Equals(fileName, request.FileName, StringComparison.Ordinal))
+        {
+            return Results.BadRequest();
+        }
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return Results.NotFound();
+        }
+
+        var playlistRoot = Path.Combine(workingDirectory, id.ToString());
+        if (!Directory.Exists(playlistRoot))
+        {
+            return Results.NotFound();
+        }
+
+        var sourcePath = Path.Combine(playlistRoot, fileName);
+        if (!System.IO.File.Exists(sourcePath))
+        {
+            return Results.NotFound();
+        }
+
+        var sourceExtension = Path.GetExtension(fileName);
+        if (!string.Equals(sourceExtension, ".mp3", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var selectedMatch = Regex.Match(
+            baseName,
+            "^(?<pos>\\d+)(?:_(?<variant>\\d+))?$",
+            RegexOptions.CultureInvariant);
+        if (!selectedMatch.Success || !int.TryParse(selectedMatch.Groups["pos"].Value, out var selectedPosition))
+        {
+            return Results.BadRequest();
+        }
+
+        if (selectedPosition != request.PlaylistPosition)
+        {
+            return Results.BadRequest();
+        }
+
+        var fullPlaylistRoot = Path.GetFullPath(playlistRoot);
+        var fullSourcePath = Path.GetFullPath(sourcePath);
+        if (!fullSourcePath.StartsWith(fullPlaylistRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var tmpPlaylistPath = Path.Combine(workingDirectory, "tmp-playlist");
+        Directory.CreateDirectory(tmpPlaylistPath);
+
+        var existingNumbers = Directory.EnumerateFiles(tmpPlaylistPath)
+            .Select(Path.GetFileNameWithoutExtension)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => int.TryParse(name, out var parsed) ? parsed : 0)
+            .Where(value => value > 0)
+            .ToList();
+        var nextNumber = existingNumbers.Count == 0 ? 1 : existingNumbers.Max() + 1;
+
+        var targetAudioFileName = $"{nextNumber}.mp3";
+        var targetAudioPath = Path.Combine(tmpPlaylistPath, targetAudioFileName);
+        var sourceJsonPath = Path.ChangeExtension(sourcePath, ".json");
+        var targetJsonFileName = $"{nextNumber}.json";
+        var targetJsonPath = Path.Combine(tmpPlaylistPath, targetJsonFileName);
+
+        try
+        {
+            System.IO.File.Move(sourcePath, targetAudioPath, false);
+            if (System.IO.File.Exists(sourceJsonPath))
+            {
+                System.IO.File.Move(sourceJsonPath, targetJsonPath, true);
+            }
+        }
+        catch
+        {
+            return Results.BadRequest();
+        }
+
+        return Results.Ok(new MovePlaylistTrackAudioResponse(
+            id,
+            request.PlaylistPosition,
+            fileName,
+            targetAudioFileName,
+            System.IO.File.Exists(targetJsonPath) ? targetJsonFileName : null,
+            Path.Combine("tmp-playlist", targetAudioFileName).Replace("\\", "/")));
+    }
+
+    private static IResult DeletePlaylistTrackAudioAsync(
+        Guid id,
+        DeletePlaylistTrackAudioRequest request,
+        IConfiguration configuration)
+    {
+        if (request.PlaylistPosition <= 0 || string.IsNullOrWhiteSpace(request.FileName))
+        {
+            return Results.BadRequest();
+        }
+
+        var fileName = Path.GetFileName(request.FileName);
+        if (string.IsNullOrWhiteSpace(fileName) || !string.Equals(fileName, request.FileName, StringComparison.Ordinal))
+        {
+            return Results.BadRequest();
+        }
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return Results.NotFound();
+        }
+
+        var playlistRoot = Path.Combine(workingDirectory, id.ToString());
+        if (!Directory.Exists(playlistRoot))
+        {
+            return Results.NotFound();
+        }
+
+        var sourcePath = Path.Combine(playlistRoot, fileName);
+        if (!System.IO.File.Exists(sourcePath))
+        {
+            return Results.NotFound();
+        }
+
+        var sourceExtension = Path.GetExtension(fileName);
+        if (!string.Equals(sourceExtension, ".mp3", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var selectedMatch = Regex.Match(
+            baseName,
+            "^(?<pos>\\d+)(?:_(?<variant>\\d+))?$",
+            RegexOptions.CultureInvariant);
+        if (!selectedMatch.Success || !int.TryParse(selectedMatch.Groups["pos"].Value, out var selectedPosition))
+        {
+            return Results.BadRequest();
+        }
+
+        if (selectedPosition != request.PlaylistPosition)
+        {
+            return Results.BadRequest();
+        }
+
+        var fullPlaylistRoot = Path.GetFullPath(playlistRoot);
+        var fullSourcePath = Path.GetFullPath(sourcePath);
+        if (!fullSourcePath.StartsWith(fullPlaylistRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest();
+        }
+
+        var sourceJsonPath = Path.ChangeExtension(sourcePath, ".json");
+        try
+        {
+            System.IO.File.Delete(sourcePath);
+            if (System.IO.File.Exists(sourceJsonPath))
+            {
+                System.IO.File.Delete(sourceJsonPath);
+            }
+        }
+        catch
+        {
+            return Results.BadRequest();
+        }
+
+        var wasMaster = !selectedMatch.Groups["variant"].Success;
+        var promoted = false;
+        string? promotedFileName = null;
+        if (wasMaster)
+        {
+            var promotionCandidates = Directory.EnumerateFiles(playlistRoot, $"{request.PlaylistPosition}_*.mp3")
+                .Where(path =>
+                {
+                    var name = Path.GetFileName(path);
+                    if (string.IsNullOrWhiteSpace(name) || name.StartsWith("._", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    var nameWithoutExt = Path.GetFileNameWithoutExtension(name);
+                    return Regex.IsMatch(nameWithoutExt, $"^{request.PlaylistPosition}_\\d+$", RegexOptions.CultureInvariant);
+                })
+                .OrderBy(path =>
+                {
+                    var candidateName = Path.GetFileNameWithoutExtension(path);
+                    var match = Regex.Match(candidateName, "^(?<pos>\\d+)_(?<variant>\\d+)$", RegexOptions.CultureInvariant);
+                    return match.Success && int.TryParse(match.Groups["variant"].Value, out var variant)
+                        ? variant
+                        : int.MaxValue;
+                })
+                .ToList();
+
+            var promotePath = promotionCandidates.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(promotePath))
+            {
+                var masterAudioPath = Path.Combine(playlistRoot, $"{request.PlaylistPosition}.mp3");
+                var promoteJsonPath = Path.ChangeExtension(promotePath, ".json");
+                var masterJsonPath = Path.Combine(playlistRoot, $"{request.PlaylistPosition}.json");
+
+                try
+                {
+                    System.IO.File.Move(promotePath, masterAudioPath, true);
+                    if (System.IO.File.Exists(promoteJsonPath))
+                    {
+                        System.IO.File.Move(promoteJsonPath, masterJsonPath, true);
+                    }
+
+                    promoted = true;
+                    promotedFileName = $"{request.PlaylistPosition}.mp3";
+                }
+                catch
+                {
+                    return Results.BadRequest();
+                }
+            }
+        }
+
+        return Results.Ok(new DeletePlaylistTrackAudioResponse(
+            id,
+            request.PlaylistPosition,
+            fileName,
+            true,
+            promoted,
+            promotedFileName));
+    }
+
     private static IReadOnlyList<(int Position, PlaylistMediaFileResponse File)> DiscoverMediaFiles(
         string playlistRoot,
         string? searchSubfolder,
@@ -309,7 +877,19 @@ public static class PlaylistEndpoints
 
     private static int? ParsePlaylistPosition(string baseName)
     {
-        var match = Regex.Match(baseName, "^(?<pos>\\d+)(?:_\\d+)?$", RegexOptions.CultureInvariant);
+        var thumbnailMatch = Regex.Match(
+            baseName,
+            "^(?<pos>\\d+)_thumbnail(?:_\\d+)?$",
+            RegexOptions.CultureInvariant);
+        if (thumbnailMatch.Success && int.TryParse(thumbnailMatch.Groups["pos"].Value, out var thumbnailPosition))
+        {
+            return thumbnailPosition;
+        }
+
+        var match = Regex.Match(
+            baseName,
+            "^(?<pos>\\d+)(?:_\\d+)?$",
+            RegexOptions.CultureInvariant);
         if (!match.Success)
         {
             return null;
