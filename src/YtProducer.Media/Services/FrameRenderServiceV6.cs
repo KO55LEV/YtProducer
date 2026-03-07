@@ -2,13 +2,13 @@ using YtProducer.Media.Models;
 
 namespace YtProducer.Media.Services;
 
-public sealed class FrameRenderServiceV5
+public sealed class FrameRenderServiceV6
 {
     private readonly string _ffmpegPath;
     private readonly string _ffprobePath;
     private readonly FfmpegRunner _runner;
 
-    public FrameRenderServiceV5(string ffmpegPath, string ffprobePath, FfmpegRunner runner)
+    public FrameRenderServiceV6(string ffmpegPath, string ffprobePath, FfmpegRunner runner)
     {
         _ffmpegPath = ffmpegPath;
         _ffprobePath = ffprobePath;
@@ -17,6 +17,7 @@ public sealed class FrameRenderServiceV5
 
     public async Task RenderFramesToRawStreamAsync(
         string imagePath,
+        string logoPath,
         AnalysisDocument analysis,
         int width,
         int height,
@@ -27,6 +28,10 @@ public sealed class FrameRenderServiceV5
     {
         var sourceImage = await ImageUtils
             .LoadImageAsync(_ffmpegPath, _ffprobePath, _runner, imagePath, cancellationToken)
+            .ConfigureAwait(false);
+
+        var logoImage = await ImageUtils
+            .LoadImageAsync(_ffmpegPath, _ffprobePath, _runner, logoPath, cancellationToken)
             .ConfigureAwait(false);
 
         var rng = new DeterministicRandom(seed);
@@ -83,6 +88,7 @@ public sealed class FrameRenderServiceV5
 
             DrawDust(framePixels, width, height, dust, frame, dustSpeed, seed);
             DrawEqualizer(framePixels, width, height, frame, smoothedBands);
+            DrawLogo(framePixels, width, height, logoImage, frame);
 
             await output.WriteAsync(framePixels, cancellationToken).ConfigureAwait(false);
             if (onProgressAsync is not null)
@@ -91,6 +97,113 @@ public sealed class FrameRenderServiceV5
             }
 
             beatPunch *= 0.80;
+        }
+    }
+
+    private static void DrawLogo(byte[] buffer, int width, int height, RgbaImage logo, AnalysisFrame frame)
+    {
+        var targetWidth = Math.Max(120, (int)Math.Round(width * 0.135));
+        var baseScale = targetWidth / (double)logo.Width;
+        var pulseScale = 1.0 + (frame.Beat ? 0.045 : 0.0) + frame.Energy * 0.020;
+        var scale = baseScale * pulseScale;
+        var scaledWidth = Math.Max(120, (int)Math.Round(logo.Width * scale));
+        var targetHeight = Math.Max(40, (int)Math.Round(logo.Height * scale));
+        var margin = Math.Max(18, (int)Math.Round(width * 0.028));
+
+        // Top-left anchor with subtle micro-float motion.
+        var floatX = (int)Math.Round(Math.Sin(frame.T * 0.90) * 2.0);
+        var floatY = (int)Math.Round(Math.Cos(frame.T * 0.75) * 2.0);
+        var x = margin + floatX;
+        var y = margin + floatY;
+
+        // Energy/beat breathing.
+        var opacity = Math.Clamp(0.76 + frame.Energy * 0.10 + (frame.Beat ? 0.08 : 0.0), 0.70, 0.94);
+
+        // Beat-reactive glow for eye-catching branding.
+        var glowStrength = Math.Clamp(0.18 + frame.Energy * 0.20 + (frame.Beat ? 0.20 : 0.0), 0.15, 0.42);
+        DrawResizedImageAdditive(
+            buffer,
+            width,
+            height,
+            logo,
+            x - (int)Math.Round(scaledWidth * 0.035),
+            y - (int)Math.Round(targetHeight * 0.035),
+            (int)Math.Round(scaledWidth * 1.07),
+            (int)Math.Round(targetHeight * 1.07),
+            glowStrength);
+
+        DrawResizedImage(buffer, width, height, logo, x, y, scaledWidth, targetHeight, opacity);
+    }
+
+    private static void DrawResizedImage(
+        byte[] destination,
+        int width,
+        int height,
+        RgbaImage source,
+        int dstX,
+        int dstY,
+        int dstW,
+        int dstH,
+        double opacity)
+    {
+        var invW = source.Width / (double)dstW;
+        var invH = source.Height / (double)dstH;
+
+        for (var y = 0; y < dstH; y++)
+        {
+            var py = dstY + y;
+            if (py < 0 || py >= height) continue;
+            var sy = y * invH;
+
+            for (var x = 0; x < dstW; x++)
+            {
+                var px = dstX + x;
+                if (px < 0 || px >= width) continue;
+                var sx = x * invW;
+
+                Sample(source, sx, sy, out var sr, out var sg, out var sb, out var sa);
+                if (sa <= 0) continue;
+
+                BlendPixel(destination, width, px, py, sr, sg, sb, sa * opacity, false);
+            }
+        }
+    }
+
+    private static void DrawResizedImageAdditive(
+        byte[] destination,
+        int width,
+        int height,
+        RgbaImage source,
+        int dstX,
+        int dstY,
+        int dstW,
+        int dstH,
+        double opacity)
+    {
+        var invW = source.Width / (double)dstW;
+        var invH = source.Height / (double)dstH;
+
+        for (var y = 0; y < dstH; y++)
+        {
+            var py = dstY + y;
+            if (py < 0 || py >= height) continue;
+            var sy = y * invH;
+
+            for (var x = 0; x < dstW; x++)
+            {
+                var px = dstX + x;
+                if (px < 0 || px >= width) continue;
+                var sx = x * invW;
+
+                Sample(source, sx, sy, out var sr, out var sg, out var sb, out var sa);
+                if (sa <= 0) continue;
+
+                // Warm/cool mixed glow tint to match logo palette.
+                var gr = sr * 1.06;
+                var gg = sg * 1.03;
+                var gb = sb * 1.10;
+                BlendPixel(destination, width, px, py, gr, gg, gb, sa * opacity, true);
+            }
         }
     }
 
@@ -269,8 +382,8 @@ public sealed class FrameRenderServiceV5
 
         var marginX = width * 0.085;
         var baseY = height * 0.91;
-        var maxH = height * 0.291; // +~15% from previous v5 tuning
-        var barW = Math.Max(1.8, (width * 0.84) / count * 0.79); // +~15% wider
+        var maxH = height * 0.291;
+        var barW = Math.Max(1.8, (width * 0.84) / count * 0.79);
         var gap = Math.Max(0.45, ((width * 0.84) - barW * count) / Math.Max(1, count - 1));
 
         for (var i = 0; i < count; i++)

@@ -173,6 +173,11 @@ var commands = new Dictionary<string, Func<IServiceProvider, Task>>(StringCompar
     {
         var ytService = scopedServices.GetRequiredService<YtService>();
         await ytService.RunTrackCreateYoutubeVideoThumbnailAsync(commandArgs);
+    },
+    ["track-create-youtube-video-thumbnail_v2"] = async scopedServices =>
+    {
+        var ytService = scopedServices.GetRequiredService<YtService>();
+        await ytService.RunTrackCreateYoutubeVideoThumbnailV2Async(commandArgs);
     }
 };
 

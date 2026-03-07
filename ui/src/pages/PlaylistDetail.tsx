@@ -823,44 +823,7 @@ function TrackAudioPlayer({
   return (
     <div className="track-audio-shell">
       <audio ref={audioRef} src={src} preload="metadata" />
-      <button
-        type="button"
-        className="track-audio-play"
-        onClick={togglePlay}
-        aria-label={isPlaying ? "Pause" : "Play"}
-      >
-        {isPlaying ? (
-          <span className="track-audio-icon track-audio-icon-pause">❚❚</span>
-        ) : (
-          <span className="track-audio-icon track-audio-icon-play">▶</span>
-        )}
-      </button>
-      <div className="track-audio-time">
-        {formatTime(currentTime)} / {formatTime(duration)}
-      </div>
-      <input
-        className="track-audio-scrub"
-        type="range"
-        min={0}
-        max={100}
-        step={0.1}
-        value={displayedProgress}
-        onPointerDown={() => {
-          setIsSeeking(true);
-          setSeekValue(progress);
-        }}
-        onPointerUp={() => setIsSeeking(false)}
-        onTouchStart={() => {
-          setIsSeeking(true);
-          setSeekValue(progress);
-        }}
-        onTouchEnd={() => setIsSeeking(false)}
-        onBlur={() => setIsSeeking(false)}
-        onInput={(event) => handleSeek(Number((event.target as HTMLInputElement).value))}
-        onChange={(event) => handleSeek(Number(event.target.value))}
-        aria-label={`Scrub ${label}`}
-      />
-      <div className="track-audio-actions">
+      <div className="track-audio-actions track-audio-actions-top">
         <button
           type="button"
           className="track-audio-action-btn"
@@ -881,6 +844,45 @@ function TrackAudioPlayer({
         >
           {deleteBusy ? "Deleting..." : "Delete"}
         </button>
+      </div>
+      <div className="track-audio-main">
+        <button
+          type="button"
+          className="track-audio-play"
+          onClick={togglePlay}
+          aria-label={isPlaying ? "Pause" : "Play"}
+        >
+          {isPlaying ? (
+            <span className="track-audio-icon track-audio-icon-pause">❚❚</span>
+          ) : (
+            <span className="track-audio-icon track-audio-icon-play">▶</span>
+          )}
+        </button>
+        <div className="track-audio-time">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </div>
+        <input
+          className="track-audio-scrub"
+          type="range"
+          min={0}
+          max={100}
+          step={0.1}
+          value={displayedProgress}
+          onPointerDown={() => {
+            setIsSeeking(true);
+            setSeekValue(progress);
+          }}
+          onPointerUp={() => setIsSeeking(false)}
+          onTouchStart={() => {
+            setIsSeeking(true);
+            setSeekValue(progress);
+          }}
+          onTouchEnd={() => setIsSeeking(false)}
+          onBlur={() => setIsSeeking(false)}
+          onInput={(event) => handleSeek(Number((event.target as HTMLInputElement).value))}
+          onChange={(event) => handleSeek(Number(event.target.value))}
+          aria-label={`Scrub ${label}`}
+        />
       </div>
     </div>
   );

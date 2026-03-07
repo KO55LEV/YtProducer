@@ -70,6 +70,20 @@ public static class PlaylistEndpoints
             .WithName("GetPlaylistYoutubeVideos")
             .Produces<IReadOnlyList<TrackOnYoutubeResponse>>(StatusCodes.Status200OK);
 
+        group.MapGet("/{id:guid}/video-generations", GetPlaylistTrackVideoGenerationsAsync)
+            .WithName("GetPlaylistTrackVideoGenerations")
+            .Produces<IReadOnlyList<TrackVideoGenerationResponse>>(StatusCodes.Status200OK);
+
+        group.MapGet("/{id:guid}/video-generations/{position:int}", GetPlaylistTrackVideoGenerationByPositionAsync)
+            .WithName("GetPlaylistTrackVideoGenerationByPosition")
+            .Produces<TrackVideoGenerationResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPut("/{id:guid}/video-generations/{position:int}", UpsertPlaylistTrackVideoGenerationAsync)
+            .WithName("UpsertPlaylistTrackVideoGeneration")
+            .Produces<TrackVideoGenerationResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
         return app;
     }
 
@@ -931,5 +945,162 @@ public static class PlaylistEndpoints
             item.CreatedAtUtc)).ToList();
 
         return Results.Ok(response);
+    }
+
+    private static async Task<IResult> GetPlaylistTrackVideoGenerationsAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var items = await dbContext.TrackVideoGenerations
+            .AsNoTracking()
+            .Where(x => x.PlaylistId == id)
+            .OrderBy(x => x.PlaylistPosition)
+            .ThenBy(x => x.UpdatedAtUtc)
+            .ToListAsync(cancellationToken);
+
+        var response = items
+            .Select(MapToTrackVideoGenerationResponse)
+            .ToList();
+
+        return Results.Ok(response);
+    }
+
+    private static async Task<IResult> GetPlaylistTrackVideoGenerationByPositionAsync(
+        Guid id,
+        int position,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (position <= 0)
+        {
+            return Results.NotFound();
+        }
+
+        var item = await dbContext.TrackVideoGenerations
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.PlaylistId == id && x.PlaylistPosition == position, cancellationToken);
+
+        if (item == null)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(MapToTrackVideoGenerationResponse(item));
+    }
+
+    private static async Task<IResult> UpsertPlaylistTrackVideoGenerationAsync(
+        Guid id,
+        int position,
+        UpsertTrackVideoGenerationRequest request,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (position <= 0)
+        {
+            return Results.NotFound();
+        }
+
+        var track = await dbContext.Tracks
+            .FirstOrDefaultAsync(t => t.PlaylistId == id && t.PlaylistPosition == position, cancellationToken);
+
+        if (track == null)
+        {
+            return Results.NotFound();
+        }
+
+        var item = await dbContext.TrackVideoGenerations
+            .FirstOrDefaultAsync(x => x.TrackId == track.Id, cancellationToken);
+
+        if (item == null)
+        {
+            item = new TrackVideoGeneration
+            {
+                Id = Guid.NewGuid(),
+                TrackId = track.Id,
+                PlaylistId = track.PlaylistId,
+                PlaylistPosition = track.PlaylistPosition,
+                Status = "Pending",
+                ProgressPercent = 0,
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow
+            };
+            dbContext.TrackVideoGenerations.Add(item);
+        }
+
+        item.Status = string.IsNullOrWhiteSpace(request.Status) ? item.Status : request.Status.Trim();
+        item.ProgressPercent = Math.Clamp(request.ProgressPercent ?? item.ProgressPercent, 0, 100);
+        item.ProgressCurrentFrame = request.ProgressCurrentFrame ?? item.ProgressCurrentFrame;
+        item.ProgressTotalFrames = request.ProgressTotalFrames ?? item.ProgressTotalFrames;
+        item.TrackDurationSeconds = request.TrackDurationSeconds ?? item.TrackDurationSeconds;
+        item.ImagePath = request.ImagePath ?? item.ImagePath;
+        item.AudioPath = request.AudioPath ?? item.AudioPath;
+        item.TempDir = request.TempDir ?? item.TempDir;
+        item.OutputDir = request.OutputDir ?? item.OutputDir;
+        item.Width = request.Width ?? item.Width;
+        item.Height = request.Height ?? item.Height;
+        item.Fps = request.Fps ?? item.Fps;
+        item.EqBands = request.EqBands ?? item.EqBands;
+        item.VideoBitrate = request.VideoBitrate ?? item.VideoBitrate;
+        item.AudioBitrate = request.AudioBitrate ?? item.AudioBitrate;
+        item.Seed = request.Seed ?? item.Seed;
+        item.UseGpu = request.UseGpu ?? item.UseGpu;
+        item.KeepTemp = request.KeepTemp ?? item.KeepTemp;
+        item.UseRawPipe = request.UseRawPipe ?? item.UseRawPipe;
+        item.RendererVariant = request.RendererVariant ?? item.RendererVariant;
+        item.OutputFileNameOverride = request.OutputFileNameOverride ?? item.OutputFileNameOverride;
+        item.LogoPath = request.LogoPath ?? item.LogoPath;
+        item.OutputVideoPath = request.OutputVideoPath ?? item.OutputVideoPath;
+        item.AnalysisPath = request.AnalysisPath ?? item.AnalysisPath;
+        item.FfmpegCommand = request.FfmpegCommand ?? item.FfmpegCommand;
+        item.ErrorMessage = request.ErrorMessage ?? item.ErrorMessage;
+        item.Metadata = request.Metadata ?? item.Metadata;
+        item.StartedAtUtc = request.StartedAtUtc ?? item.StartedAtUtc;
+        item.FinishedAtUtc = request.FinishedAtUtc ?? item.FinishedAtUtc;
+        item.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Results.Ok(MapToTrackVideoGenerationResponse(item));
+    }
+
+    private static TrackVideoGenerationResponse MapToTrackVideoGenerationResponse(TrackVideoGeneration item)
+    {
+        return new TrackVideoGenerationResponse(
+            item.Id,
+            item.TrackId,
+            item.PlaylistId,
+            item.PlaylistPosition,
+            item.Status,
+            item.ProgressPercent,
+            item.ProgressCurrentFrame,
+            item.ProgressTotalFrames,
+            item.TrackDurationSeconds,
+            item.ImagePath,
+            item.AudioPath,
+            item.TempDir,
+            item.OutputDir,
+            item.Width,
+            item.Height,
+            item.Fps,
+            item.EqBands,
+            item.VideoBitrate,
+            item.AudioBitrate,
+            item.Seed,
+            item.UseGpu,
+            item.KeepTemp,
+            item.UseRawPipe,
+            item.RendererVariant,
+            item.OutputFileNameOverride,
+            item.LogoPath,
+            item.OutputVideoPath,
+            item.AnalysisPath,
+            item.FfmpegCommand,
+            item.ErrorMessage,
+            item.Metadata,
+            item.StartedAtUtc,
+            item.FinishedAtUtc,
+            item.CreatedAtUtc,
+            item.UpdatedAtUtc);
     }
 }

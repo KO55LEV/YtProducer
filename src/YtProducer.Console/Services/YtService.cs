@@ -380,7 +380,7 @@ public class YtService
         {
             global::System.Console.WriteLine("Usage: test_generate_video <version>");
             global::System.Console.WriteLine("Example: test_generate_video v1");
-            global::System.Console.WriteLine("Supported versions: v1, v2, v3, v4, v5");
+            global::System.Console.WriteLine("Supported versions: v1, v2, v3, v4, v5, v6, v7");
             return;
         }
 
@@ -388,7 +388,7 @@ public class YtService
         var profile = ResolveTestGenerateVideoProfile(version);
         if (profile is null)
         {
-            global::System.Console.WriteLine("Unsupported version. Supported values: v1, v2, v3, v4, v5");
+            global::System.Console.WriteLine("Unsupported version. Supported values: v1, v2, v3, v4, v5, v6, v7");
             return;
         }
 
@@ -431,6 +431,7 @@ public class YtService
         var frameRenderService = new FrameRenderService(ffmpegPath, ffprobePath, runner);
         var frameRenderServiceV4 = new FrameRenderServiceV4(ffmpegPath, ffprobePath, runner);
         var frameRenderServiceV5 = new FrameRenderServiceV5(ffmpegPath, ffprobePath, runner);
+        var frameRenderServiceV6 = new FrameRenderServiceV6(ffmpegPath, ffprobePath, runner);
         var videoEncodeService = new VideoEncodeService(ffmpegPath, runner, outputDir);
 
         WorkingDirectoryContext? job = null;
@@ -499,6 +500,48 @@ public class YtService
                         frameRenderServiceV5,
                         ffmpegPath,
                         imagePath,
+                        analysis,
+                        audioPath,
+                        width,
+                        height,
+                        fps,
+                        seed,
+                        videoBitrate,
+                        audioBitrate,
+                        outputDir,
+                        outputFileNameOverride,
+                        job.LogsDir,
+                        useGpu,
+                        CancellationToken.None);
+                }
+                else if (string.Equals(rendererVariant, "v6", StringComparison.OrdinalIgnoreCase))
+                {
+                    encodeResult = await EncodeRawFramesV6WithFallbackAsync(
+                        frameRenderServiceV6,
+                        ffmpegPath,
+                        imagePath,
+                        profile.LogoPath,
+                        analysis,
+                        audioPath,
+                        width,
+                        height,
+                        fps,
+                        seed,
+                        videoBitrate,
+                        audioBitrate,
+                        outputDir,
+                        outputFileNameOverride,
+                        job.LogsDir,
+                        useGpu,
+                        CancellationToken.None);
+                }
+                else if (string.Equals(rendererVariant, "v7", StringComparison.OrdinalIgnoreCase))
+                {
+                    encodeResult = await EncodeRawFramesV7WithFallbackAsync(
+                        frameRenderServiceV6,
+                        ffmpegPath,
+                        imagePath,
+                        profile.LogoPath,
                         analysis,
                         audioPath,
                         width,
@@ -666,7 +709,8 @@ public class YtService
                 KeepTemp: false,
                 UseRawPipe: false,
                 RendererVariant: "default",
-                OutputFileNameOverride: null);
+                OutputFileNameOverride: null,
+                LogoPath: null);
         }
 
         if (string.Equals(version, "v2", StringComparison.OrdinalIgnoreCase))
@@ -687,7 +731,8 @@ public class YtService
                 KeepTemp: false,
                 UseRawPipe: false,
                 RendererVariant: "default",
-                OutputFileNameOverride: null);
+                OutputFileNameOverride: null,
+                LogoPath: null);
         }
 
         if (string.Equals(version, "v3", StringComparison.OrdinalIgnoreCase))
@@ -708,7 +753,8 @@ public class YtService
                 KeepTemp: false,
                 UseRawPipe: true,
                 RendererVariant: "default",
-                OutputFileNameOverride: null);
+                OutputFileNameOverride: null,
+                LogoPath: null);
         }
 
         if (string.Equals(version, "v4", StringComparison.OrdinalIgnoreCase))
@@ -729,14 +775,15 @@ public class YtService
                 KeepTemp: false,
                 UseRawPipe: true,
                 RendererVariant: "v4",
-                OutputFileNameOverride: "5-sec-music.mp4");
+                OutputFileNameOverride: "5-sec-music.mp4",
+                LogoPath: null);
         }
 
         if (string.Equals(version, "v5", StringComparison.OrdinalIgnoreCase))
         {
             return new TestGenerateVideoProfile(
-                ImagePath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/10-sec-music.jpg",
-                AudioPath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/10-sec-music.mp3",
+                ImagePath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/5-sec-music.jpg",
+                AudioPath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/5-sec-music.mp3",
                 TempDir: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/",
                 OutputDir: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/",
                 Width: 1920,
@@ -750,7 +797,52 @@ public class YtService
                 KeepTemp: false,
                 UseRawPipe: true,
                 RendererVariant: "v5",
-                OutputFileNameOverride: "10-sec-music.mp4");
+                OutputFileNameOverride: "5-sec-music.mp4",
+                LogoPath: null);
+        }
+
+        if (string.Equals(version, "v6", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TestGenerateVideoProfile(
+                ImagePath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/5-sec-music.jpg",
+                AudioPath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/5-sec-music.mp3",
+                TempDir: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/",
+                OutputDir: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/",
+                Width: 1920,
+                Height: 1080,
+                Fps: 24,
+                EqBands: 64,
+                VideoBitrate: "12M",
+                AudioBitrate: "320k",
+                Seed: 42,
+                UseGpu: true,
+                KeepTemp: false,
+                UseRawPipe: true,
+                RendererVariant: "v6",
+                OutputFileNameOverride: "5-sec-music.mp4",
+                LogoPath: "/Volumes/SS2TBSND/YtMusicProducer/WorkingDirectory/AuruzMusic_logo-1.png");
+        }
+
+        if (string.Equals(version, "v7", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TestGenerateVideoProfile(
+                ImagePath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/10-sec-music.jpg",
+                AudioPath: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/10-sec-music.mp3",
+                TempDir: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/",
+                OutputDir: "/Volumes/SS2TBSND/YtMusicProducer/MediaTst/",
+                Width: 1920,
+                Height: 1080,
+                Fps: 20,
+                EqBands: 48,
+                VideoBitrate: "10M",
+                AudioBitrate: "256k",
+                Seed: 42,
+                UseGpu: true,
+                KeepTemp: false,
+                UseRawPipe: true,
+                RendererVariant: "v7",
+                OutputFileNameOverride: "10-sec-music.mp4",
+                LogoPath: "/Volumes/SS2TBSND/YtMusicProducer/WorkingDirectory/AuruzMusic_logo-1.png");
         }
 
         return null;
@@ -1220,6 +1312,374 @@ public class YtService
             Path.Combine(logsDir, "ffmpeg_stderr_raw_none.txt"));
     }
 
+    private async Task<VideoEncodeResult> EncodeRawFramesV6WithFallbackAsync(
+        FrameRenderServiceV6 frameRenderService,
+        string ffmpegPath,
+        string imagePath,
+        string? logoPath,
+        AnalysisDocument analysis,
+        string audioPath,
+        int width,
+        int height,
+        int fps,
+        int seed,
+        string videoBitrate,
+        string audioBitrate,
+        string outputDir,
+        string? outputFileNameOverride,
+        string logsDir,
+        bool useGpu,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(logoPath))
+        {
+            return new VideoEncodeResult(false, string.Empty, string.Empty, "Logo path is missing for v6.", string.Empty);
+        }
+
+        if (!File.Exists(logoPath))
+        {
+            return new VideoEncodeResult(false, string.Empty, string.Empty, $"Logo file not found: {logoPath}", string.Empty);
+        }
+
+        Directory.CreateDirectory(outputDir);
+        Directory.CreateDirectory(logsDir);
+
+        var codecs = GetPreferredVideoCodecs(useGpu);
+        VideoEncodeResult? lastResult = null;
+        var progressState = new ProgressFileState();
+        var processBaseName = $"{Path.GetFileNameWithoutExtension(audioPath)}_process";
+
+        foreach (var codec in codecs)
+        {
+            var outputPath = !string.IsNullOrWhiteSpace(outputFileNameOverride)
+                ? Path.Combine(outputDir, outputFileNameOverride)
+                : Path.Combine(outputDir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}.mp4");
+
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            var stderrPath = Path.Combine(logsDir, $"ffmpeg_stderr_raw_{codec}.txt");
+
+            var args = new List<string>
+            {
+                "-y",
+                "-f", "rawvideo",
+                "-pix_fmt", "rgba",
+                "-s", $"{width}x{height}",
+                "-r", fps.ToString(),
+                "-i", "-",
+                "-i", audioPath,
+                "-c:v", codec
+            };
+
+            if (string.Equals(codec, "libx264", StringComparison.Ordinal))
+            {
+                args.Add("-profile:v");
+                args.Add("high");
+            }
+
+            args.Add("-pix_fmt");
+            args.Add("yuv420p");
+            args.Add("-r");
+            args.Add(fps.ToString());
+            args.Add("-b:v");
+            args.Add(videoBitrate);
+            args.Add("-movflags");
+            args.Add("+faststart");
+            args.Add("-c:a");
+            args.Add("aac");
+            args.Add("-b:a");
+            args.Add(audioBitrate);
+            args.Add("-ar");
+            args.Add("48000");
+            args.Add("-shortest");
+            args.Add(outputPath);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = outputDir
+            };
+
+            foreach (var arg in args)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            using var process = new Process { StartInfo = startInfo };
+            if (!process.Start())
+            {
+                lastResult = new VideoEncodeResult(
+                    false,
+                    outputPath,
+                    FfmpegRunner.BuildCommandLine(ffmpegPath, args),
+                    $"Failed to start ffmpeg for codec {codec}.",
+                    stderrPath);
+                continue;
+            }
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+            var lastProgressUpdateUtc = DateTimeOffset.MinValue;
+            Func<int, int, Task> onProgressAsync = (current, total) =>
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (current < total && (now - lastProgressUpdateUtc).TotalMilliseconds < 250)
+                {
+                    return Task.CompletedTask;
+                }
+
+                lastProgressUpdateUtc = now;
+                UpdateProgressFile(outputDir, processBaseName, current, total, progressState);
+                return Task.CompletedTask;
+            };
+
+            try
+            {
+                await frameRenderService.RenderFramesToRawStreamAsync(
+                    imagePath,
+                    logoPath,
+                    analysis,
+                    width,
+                    height,
+                    seed,
+                    process.StandardInput.BaseStream,
+                    onProgressAsync,
+                    cancellationToken);
+                await process.StandardInput.FlushAsync(cancellationToken);
+            }
+            finally
+            {
+                process.StandardInput.Close();
+            }
+
+            await process.WaitForExitAsync(cancellationToken);
+            var _ = await stdoutTask;
+            var stderr = await stderrTask;
+            await File.WriteAllTextAsync(stderrPath, stderr, cancellationToken);
+
+            if (process.ExitCode == 0 && File.Exists(outputPath))
+            {
+                UpdateProgressFile(outputDir, processBaseName, analysis.FrameCount, analysis.FrameCount, progressState);
+                return new VideoEncodeResult(
+                    true,
+                    outputPath,
+                    FfmpegRunner.BuildCommandLine(ffmpegPath, args),
+                    ClipTail(stderr, 8000),
+                    stderrPath);
+            }
+
+            lastResult = new VideoEncodeResult(
+                false,
+                outputPath,
+                FfmpegRunner.BuildCommandLine(ffmpegPath, args),
+                ClipTail(stderr, 8000),
+                stderrPath);
+        }
+
+        return lastResult ?? new VideoEncodeResult(
+            false,
+            string.Empty,
+            string.Empty,
+            "No codec attempts executed for v6 raw pipe encode.",
+            Path.Combine(logsDir, "ffmpeg_stderr_raw_none.txt"));
+    }
+
+    private async Task<VideoEncodeResult> EncodeRawFramesV7WithFallbackAsync(
+        FrameRenderServiceV6 frameRenderService,
+        string ffmpegPath,
+        string imagePath,
+        string? logoPath,
+        AnalysisDocument analysis,
+        string audioPath,
+        int outputWidth,
+        int outputHeight,
+        int fps,
+        int seed,
+        string videoBitrate,
+        string audioBitrate,
+        string outputDir,
+        string? outputFileNameOverride,
+        string logsDir,
+        bool useGpu,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(logoPath))
+        {
+            return new VideoEncodeResult(false, string.Empty, string.Empty, "Logo path is missing for v7.", string.Empty);
+        }
+
+        if (!File.Exists(logoPath))
+        {
+            return new VideoEncodeResult(false, string.Empty, string.Empty, $"Logo file not found: {logoPath}", string.Empty);
+        }
+
+        Directory.CreateDirectory(outputDir);
+        Directory.CreateDirectory(logsDir);
+
+        var renderWidth = Math.Max(640, (int)Math.Round(outputWidth / 1.5));
+        var renderHeight = Math.Max(360, (int)Math.Round(outputHeight / 1.5));
+        if ((renderWidth & 1) == 1) renderWidth--;
+        if ((renderHeight & 1) == 1) renderHeight--;
+
+        var codecs = GetPreferredVideoCodecs(useGpu);
+        VideoEncodeResult? lastResult = null;
+        var progressState = new ProgressFileState();
+        var processBaseName = $"{Path.GetFileNameWithoutExtension(audioPath)}_process";
+
+        foreach (var codec in codecs)
+        {
+            var outputPath = !string.IsNullOrWhiteSpace(outputFileNameOverride)
+                ? Path.Combine(outputDir, outputFileNameOverride)
+                : Path.Combine(outputDir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}.mp4");
+
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            var stderrPath = Path.Combine(logsDir, $"ffmpeg_stderr_raw_{codec}.txt");
+
+            var args = new List<string>
+            {
+                "-y",
+                "-f", "rawvideo",
+                "-pix_fmt", "rgba",
+                "-s", $"{renderWidth}x{renderHeight}",
+                "-r", fps.ToString(),
+                "-i", "-",
+                "-i", audioPath,
+                "-vf", $"scale={outputWidth}:{outputHeight}:flags=fast_bilinear",
+                "-c:v", codec
+            };
+
+            if (string.Equals(codec, "libx264", StringComparison.Ordinal))
+            {
+                args.Add("-profile:v");
+                args.Add("high");
+            }
+
+            args.Add("-pix_fmt");
+            args.Add("yuv420p");
+            args.Add("-r");
+            args.Add(fps.ToString());
+            args.Add("-b:v");
+            args.Add(videoBitrate);
+            args.Add("-movflags");
+            args.Add("+faststart");
+            args.Add("-c:a");
+            args.Add("aac");
+            args.Add("-b:a");
+            args.Add(audioBitrate);
+            args.Add("-ar");
+            args.Add("48000");
+            args.Add("-shortest");
+            args.Add(outputPath);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = outputDir
+            };
+
+            foreach (var arg in args)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
+
+            using var process = new Process { StartInfo = startInfo };
+            if (!process.Start())
+            {
+                lastResult = new VideoEncodeResult(
+                    false,
+                    outputPath,
+                    FfmpegRunner.BuildCommandLine(ffmpegPath, args),
+                    $"Failed to start ffmpeg for codec {codec}.",
+                    stderrPath);
+                continue;
+            }
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+            var lastProgressUpdateUtc = DateTimeOffset.MinValue;
+            Func<int, int, Task> onProgressAsync = (current, total) =>
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (current < total && (now - lastProgressUpdateUtc).TotalMilliseconds < 250)
+                {
+                    return Task.CompletedTask;
+                }
+
+                lastProgressUpdateUtc = now;
+                UpdateProgressFile(outputDir, processBaseName, current, total, progressState);
+                return Task.CompletedTask;
+            };
+
+            try
+            {
+                await frameRenderService.RenderFramesToRawStreamAsync(
+                    imagePath,
+                    logoPath,
+                    analysis,
+                    renderWidth,
+                    renderHeight,
+                    seed,
+                    process.StandardInput.BaseStream,
+                    onProgressAsync,
+                    cancellationToken);
+                await process.StandardInput.FlushAsync(cancellationToken);
+            }
+            finally
+            {
+                process.StandardInput.Close();
+            }
+
+            await process.WaitForExitAsync(cancellationToken);
+            var _ = await stdoutTask;
+            var stderr = await stderrTask;
+            await File.WriteAllTextAsync(stderrPath, stderr, cancellationToken);
+
+            if (process.ExitCode == 0 && File.Exists(outputPath))
+            {
+                UpdateProgressFile(outputDir, processBaseName, analysis.FrameCount, analysis.FrameCount, progressState);
+                return new VideoEncodeResult(
+                    true,
+                    outputPath,
+                    FfmpegRunner.BuildCommandLine(ffmpegPath, args),
+                    ClipTail(stderr, 8000),
+                    stderrPath);
+            }
+
+            lastResult = new VideoEncodeResult(
+                false,
+                outputPath,
+                FfmpegRunner.BuildCommandLine(ffmpegPath, args),
+                ClipTail(stderr, 8000),
+                stderrPath);
+        }
+
+        return lastResult ?? new VideoEncodeResult(
+            false,
+            string.Empty,
+            string.Empty,
+            "No codec attempts executed for v7 raw pipe encode.",
+            Path.Combine(logsDir, "ffmpeg_stderr_raw_none.txt"));
+    }
+
     private static void UpdateProgressFile(
         string outputDir,
         string baseName,
@@ -1532,24 +1992,54 @@ public class YtService
             return;
         }
 
-        var positions = await _context.Tracks
+        var tracks = await _context.Tracks
             .AsNoTracking()
             .Where(t => t.PlaylistId == playlistId)
             .OrderBy(t => t.PlaylistPosition)
-            .Select(t => t.PlaylistPosition)
-            .Distinct()
+            .Select(t => new { t.Id, t.PlaylistPosition })
             .ToListAsync();
 
-        if (positions.Count == 0)
+        if (tracks.Count == 0)
         {
             global::System.Console.WriteLine("No tracks found for playlist.");
             return;
         }
 
+        var positions = tracks
+            .Select(t => t.PlaylistPosition)
+            .Distinct()
+            .OrderBy(p => p)
+            .ToList();
+
+        var uploadedTrackIdList = await _context.TrackOnYoutube
+            .AsNoTracking()
+            .Where(x => x.PlaylistId == playlistId)
+            .Select(x => x.TrackId)
+            .ToListAsync();
+        var uploadedTrackIds = new HashSet<Guid>(uploadedTrackIdList);
+
+        var publishState = await GetOrCreateYoutubeLastPublishedDateAsync();
+        var slotCursor = publishState.LastPublishedDate;
+        var scheduledByPosition = new Dictionary<int, DateTimeOffset>();
+        foreach (var track in tracks)
+        {
+            if (uploadedTrackIds.Contains(track.Id))
+            {
+                continue;
+            }
+
+            slotCursor = GetNextYoutubePublishSlotUtc(slotCursor);
+            scheduledByPosition[track.PlaylistPosition] = slotCursor;
+        }
+
         var allSucceeded = true;
         foreach (var position in positions)
         {
-            var success = await UploadYoutubeVideoWithThumbnailForPositionAsync(playlistId, position);
+            var scheduledAt = scheduledByPosition.TryGetValue(position, out var assignedSlot)
+                ? assignedSlot
+                : (DateTimeOffset?)null;
+
+            var success = await UploadYoutubeVideoWithThumbnailForPositionAsync(playlistId, position, scheduledAt);
             if (!success)
             {
                 allSucceeded = false;
@@ -1634,6 +2124,63 @@ public class YtService
         }
 
         await CreateYoutubeVideoThumbnailAsync(playlistId, position);
+    }
+
+    public async Task RunTrackCreateYoutubeVideoThumbnailV2Async(string[] commandArgs)
+    {
+        if (commandArgs.Length < 1)
+        {
+            global::System.Console.WriteLine("Usage: track-create-youtube-video-thumbnail_v2 <playlistId> [position]");
+            return;
+        }
+
+        if (!Guid.TryParse(commandArgs[0], out var playlistId))
+        {
+            global::System.Console.WriteLine("Invalid playlistId.");
+            return;
+        }
+
+        if (commandArgs.Length == 1)
+        {
+            var positions = await _context.Tracks
+                .AsNoTracking()
+                .Where(t => t.PlaylistId == playlistId)
+                .OrderBy(t => t.PlaylistPosition)
+                .Select(t => t.PlaylistPosition)
+                .Distinct()
+                .ToListAsync();
+
+            if (positions.Count == 0)
+            {
+                global::System.Console.WriteLine("No tracks found for playlist.");
+                return;
+            }
+
+            var allSucceeded = true;
+            foreach (var trackPosition in positions)
+            {
+                var success = await CreateYoutubeVideoThumbnailV2Async(playlistId, trackPosition);
+                if (!success)
+                {
+                    allSucceeded = false;
+                }
+            }
+
+            if (allSucceeded)
+            {
+                await SetPlaylistStatusAsync(playlistId, PlaylistStatus.ThumbnailGenerated);
+            }
+
+            return;
+        }
+
+        if (!int.TryParse(commandArgs[1], out var position) || position <= 0)
+        {
+            global::System.Console.WriteLine("Invalid position. Must be a positive integer.");
+            return;
+        }
+
+        await CreateYoutubeVideoThumbnailV2Async(playlistId, position);
     }
 
     private async Task SetPlaylistStatusAsync(Guid playlistId, PlaylistStatus status)
@@ -2104,9 +2651,9 @@ public class YtService
         global::System.Console.WriteLine($"youtube playlist created: {result.PlaylistId}");
     }
 
-    private async Task<bool> UploadYoutubeVideoWithThumbnailForPositionAsync(Guid playlistId, int position)
+    private async Task<bool> UploadYoutubeVideoWithThumbnailForPositionAsync(Guid playlistId, int position, DateTimeOffset? publishAtOverride = null)
     {
-        var videoUploaded = await UploadYoutubeVideoAsync(playlistId, position);
+        var videoUploaded = await UploadYoutubeVideoAsync(playlistId, position, publishAtOverride);
         if (!videoUploaded)
         {
             return false;
@@ -2115,7 +2662,7 @@ public class YtService
         return await UploadYoutubeThumbnailAsync(playlistId, position);
     }
 
-    private async Task<bool> UploadYoutubeVideoAsync(Guid playlistId, int position)
+    private async Task<bool> UploadYoutubeVideoAsync(Guid playlistId, int position, DateTimeOffset? publishAtOverride = null)
     {
         var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(workingDirectory))
@@ -2173,7 +2720,7 @@ public class YtService
         var title = track.YouTubeTitle ?? track.Title;
         var description = ResolveYoutubeDescription(track, playlist);
         var publishState = await GetOrCreateYoutubeLastPublishedDateAsync();
-        var publishAt = GetNextYoutubePublishSlotUtc(publishState.LastPublishedDate);
+        var publishAt = publishAtOverride ?? GetNextYoutubePublishSlotUtc(publishState.LastPublishedDate);
         var scheduledPrivacy = "private";
 
         var result = await ExecuteYoutubeUploadVideoAsync(
@@ -2209,8 +2756,11 @@ public class YtService
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
-        publishState.LastPublishedDate = publishAt;
-        publishState.VideoId = result.VideoId;
+        if (publishAt > publishState.LastPublishedDate)
+        {
+            publishState.LastPublishedDate = publishAt;
+            publishState.VideoId = result.VideoId;
+        }
         _context.Add(record);
         await _context.SaveChangesAsync();
 
@@ -2485,6 +3035,143 @@ public class YtService
         global::System.Console.WriteLine(
             $"track thumbnail generated playlist={playlistId} position={position} file={result.OutputPath ?? outputPath}");
         return true;
+    }
+
+    private async Task<bool> CreateYoutubeVideoThumbnailV2Async(Guid playlistId, int position)
+    {
+        var setup = await PrepareYoutubeThumbnailGenerationAsync(playlistId, position);
+        if (setup == null)
+        {
+            return false;
+        }
+
+        var request = new CreateYoutubeThumbnailRequest
+        {
+            ImagePath = setup.ImagePath,
+            LogoPath = setup.LogoPath,
+            Headline = setup.Headline,
+            Subheadline = setup.Subheadline,
+            OutputPath = setup.OutputPath,
+            Style = new CreateYoutubeThumbnailStyleRequest
+            {
+                HeadlineFont = setup.HeadlineFont,
+                SubheadlineFont = setup.SubheadlineFont,
+                HeadlineColor = setup.HeadlineColor,
+                SubheadlineColor = setup.SubheadlineColor,
+                Shadow = true,
+                Stroke = true
+            }
+        };
+
+        try
+        {
+            var service = new YoutubeThumbnailService();
+            var result = await service.CreateAsync(request, CancellationToken.None);
+            if (!result.Ok)
+            {
+                global::System.Console.WriteLine(
+                    $"track thumbnail generation failed playlist={playlistId} position={position} error=local media service returned ok=false");
+                return false;
+            }
+
+            global::System.Console.WriteLine(
+                $"track thumbnail generated playlist={playlistId} position={position} file={result.OutputPath ?? setup.OutputPath}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            global::System.Console.WriteLine(
+                $"track thumbnail generation failed playlist={playlistId} position={position} error={ex.Message}");
+            return false;
+        }
+    }
+
+    private async Task<YoutubeThumbnailGenerationSetup?> PrepareYoutubeThumbnailGenerationAsync(Guid playlistId, int position)
+    {
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            global::System.Console.WriteLine("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
+            return null;
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == playlistId);
+        if (playlist == null)
+        {
+            global::System.Console.WriteLine("Playlist not found.");
+            return null;
+        }
+
+        var track = await _context.Tracks
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.PlaylistId == playlistId && t.PlaylistPosition == position);
+        if (track == null)
+        {
+            global::System.Console.WriteLine("Track not found for position.");
+            return null;
+        }
+
+        var playlistFolderPath = Path.Combine(workingDirectory, GetPlaylistFolderName(playlistId));
+        if (!Directory.Exists(playlistFolderPath))
+        {
+            global::System.Console.WriteLine($"Playlist folder not found: {playlistFolderPath}");
+            return null;
+        }
+
+        var imagePath = ResolveImagePathForPosition(playlistFolderPath, position);
+        if (imagePath == null)
+        {
+            global::System.Console.WriteLine($"Image file not found for position {position}.");
+            return null;
+        }
+
+        var extension = Path.GetExtension(imagePath);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ".png";
+        }
+
+        var outputPath = Path.Combine(playlistFolderPath, $"{position}_thumbnail{extension.ToLowerInvariant()}");
+        if (File.Exists(outputPath))
+        {
+            try
+            {
+                File.Delete(outputPath);
+            }
+            catch (Exception ex)
+            {
+                global::System.Console.WriteLine(
+                    $"track thumbnail generation failed playlist={playlistId} position={position} error=failed to delete existing thumbnail: {ex.Message}");
+                return null;
+            }
+        }
+
+        var logoPath = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_LOGO_PATH");
+        var headlineOverride = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE");
+        var subheadlineOverride = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE");
+        var headlineFont = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE_FONT");
+        var subheadlineFont = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE_FONT");
+        var headlineColor = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE_COLOR");
+        var subheadlineColor = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE_COLOR");
+        var visualStyleHint = TryGetMetadataString(track.Metadata, "visualStyleHint")
+            ?? TryGetMetadataString(playlist.Metadata, "visualStyleHint");
+        var headline = ResolveThumbnailHeadline(track, playlist, headlineOverride);
+        var subheadline = ResolveThumbnailSubheadline(track, playlist, subheadlineOverride);
+        headlineFont = ResolveThumbnailHeadlineFont(headlineFont, visualStyleHint);
+        subheadlineFont = ResolveThumbnailSubheadlineFont(subheadlineFont, visualStyleHint);
+
+        return new YoutubeThumbnailGenerationSetup(
+            ImagePath: imagePath,
+            OutputPath: outputPath,
+            LogoPath: logoPath,
+            Headline: headline,
+            Subheadline: subheadline,
+            HeadlineFont: headlineFont,
+            SubheadlineFont: subheadlineFont,
+            HeadlineColor: headlineColor,
+            SubheadlineColor: subheadlineColor);
     }
 
     private static string ResolveThumbnailHeadline(Track track, Playlist playlist, string? headlineOverride)
@@ -4544,7 +5231,7 @@ public class YtService
             ""
         };
 
-        lines.AddRange(missingPositions.Select(position =>
+        foreach (var position in missingPositions)
         {
             var metadataPrompt = trackPromptsByPosition.TryGetValue(position, out var trackData)
                 ? trackData.ImagePrompt
@@ -4552,8 +5239,9 @@ public class YtService
             var prompt = metadataPrompt
                 ?? playlistLevelImagePrompt
                 ?? $"Square cover art for track {position} in playlist \"{safeTitle}\". Theme: {safeTheme}. Bold composition, clean typography space, professional YouTube quality.";
-            return $"{position}: {prompt}";
-        }));
+            lines.Add($"{position}: {prompt}");
+            lines.Add(string.Empty);
+        }
 
         WriteTextFileIfChanged(promptFilePath, lines);
     }
@@ -4587,7 +5275,7 @@ public class YtService
             ""
         };
 
-        lines.AddRange(missingPositions.Select(position =>
+        foreach (var position in missingPositions)
         {
             var metadataPrompt = trackPromptsByPosition.TryGetValue(position, out var trackData)
                 ? trackData.SunoPrompt
@@ -4595,8 +5283,9 @@ public class YtService
             var prompt = metadataPrompt
                 ?? playlistLevelSunoPrompt
                 ?? $"Create track {position} for playlist \"{safeTitle}\". Theme: {safeTheme}. Instrumental, 3-4 minutes, strong hook, modern production, no vocals.";
-            return $"{position}: {prompt}";
-        }));
+            lines.Add($"{position}: {prompt}");
+            lines.Add(string.Empty);
+        }
 
         WriteTextFileIfChanged(promptFilePath, lines);
     }
@@ -4759,7 +5448,19 @@ public class YtService
         bool KeepTemp,
         bool UseRawPipe,
         string RendererVariant,
-        string? OutputFileNameOverride);
+        string? OutputFileNameOverride,
+        string? LogoPath);
+
+    private sealed record YoutubeThumbnailGenerationSetup(
+        string ImagePath,
+        string OutputPath,
+        string? LogoPath,
+        string Headline,
+        string Subheadline,
+        string HeadlineFont,
+        string SubheadlineFont,
+        string? HeadlineColor,
+        string? SubheadlineColor);
 
     private sealed class ProgressFileState
     {

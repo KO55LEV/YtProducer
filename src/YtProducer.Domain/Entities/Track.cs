@@ -39,4 +39,6 @@ public sealed class Track
     public ICollection<TrackImage> Images { get; set; } = new List<TrackImage>();
 
     public ICollection<TrackOnYoutube> YoutubeVideos { get; set; } = new List<TrackOnYoutube>();
+
+    public ICollection<TrackVideoGeneration> VideoGenerations { get; set; } = new List<TrackVideoGeneration>();
 }

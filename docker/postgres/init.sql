@@ -109,6 +109,51 @@ CREATE INDEX IF NOT EXISTS ix_track_on_youtube_track_id ON track_on_youtube(trac
 CREATE INDEX IF NOT EXISTS ix_track_on_youtube_playlist_id ON track_on_youtube(playlist_id);
 CREATE INDEX IF NOT EXISTS ix_track_on_youtube_playlist_position ON track_on_youtube(playlist_id, playlist_position);
 
+CREATE TABLE IF NOT EXISTS track_video_generation (
+    id uuid PRIMARY KEY,
+    track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    playlist_position integer NOT NULL,
+    status varchar(32) NOT NULL DEFAULT 'Pending',
+    progress_percent integer NOT NULL DEFAULT 0,
+    progress_current_frame integer,
+    progress_total_frames integer,
+    track_duration_seconds double precision,
+    image_path varchar(2000),
+    audio_path varchar(2000),
+    temp_dir varchar(2000),
+    output_dir varchar(2000),
+    width integer,
+    height integer,
+    fps integer,
+    eq_bands integer,
+    video_bitrate varchar(32),
+    audio_bitrate varchar(32),
+    seed integer,
+    use_gpu boolean,
+    keep_temp boolean,
+    use_raw_pipe boolean,
+    renderer_variant varchar(32),
+    output_file_name_override varchar(256),
+    logo_path varchar(2000),
+    output_video_path varchar(2000),
+    analysis_path varchar(2000),
+    ffmpeg_command text,
+    error_message text,
+    metadata jsonb,
+    started_at_utc timestamptz,
+    finished_at_utc timestamptz,
+    created_at_utc timestamptz NOT NULL DEFAULT NOW(),
+    updated_at_utc timestamptz NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_track_video_generation_track_id UNIQUE (track_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_track_video_generation_playlist_id ON track_video_generation(playlist_id);
+CREATE INDEX IF NOT EXISTS ix_track_video_generation_playlist_position ON track_video_generation(playlist_id, playlist_position);
+CREATE INDEX IF NOT EXISTS ix_track_video_generation_status ON track_video_generation(status);
+CREATE INDEX IF NOT EXISTS ix_track_video_generation_updated_at ON track_video_generation(updated_at_utc DESC);
+CREATE INDEX IF NOT EXISTS ix_track_video_generation_metadata ON track_video_generation USING gin(metadata);
+
 CREATE TABLE IF NOT EXISTS youtube_last_published_date (
     id integer PRIMARY KEY CHECK (id = 1),
     last_published_date timestamptz NOT NULL,
