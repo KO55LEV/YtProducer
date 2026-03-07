@@ -193,6 +193,18 @@ CREATE INDEX IF NOT EXISTS idx_jobs_target ON jobs(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(lease_expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS job_logs (
+    id uuid PRIMARY KEY,
+    job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    level varchar(32) NOT NULL,
+    message text NOT NULL,
+    metadata jsonb,
+    created_at_utc timestamptz NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ix_job_logs_job_id ON job_logs(job_id);
+CREATE INDEX IF NOT EXISTS ix_job_logs_created_at_utc ON job_logs(created_at_utc);
+
 CREATE TABLE IF NOT EXISTS track_loops (
     id uuid PRIMARY KEY,
     playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,

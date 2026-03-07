@@ -30,3 +30,6 @@ dotnet run -- upload-youtube-videos e8607302-328c-441f-8afe-b10364abe5f2
 
 // add. videos to the list 
 dotnet run   -- add-youtube-videos-to-playlist e8607302-328c-441f-8afe-b10364abe5f2
+
+// process all jobs 
+dotnet run -- process_all_jobs

@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using YtProducer.Contracts.Jobs;
 using YtProducer.Contracts.Playlists;
 using YtProducer.Contracts.YoutubePlaylists;
 using YtProducer.Contracts.YoutubeUploadQueue;
@@ -83,6 +84,117 @@ public class YtService
         _logger.LogInformation("\n✓ Playlist pipeline completed!");
     }
 
+    public async Task RunProcessJobAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length != 1 || !Guid.TryParse(commandArgs[0], out var jobId))
+        {
+            global::System.Console.WriteLine("Usage: process-job <jobId>");
+            return;
+        }
+
+        var job = await _context.Jobs.FirstOrDefaultAsync(x => x.Id == jobId);
+        if (job == null)
+        {
+            global::System.Console.WriteLine($"Job not found: {jobId}");
+            return;
+        }
+
+        await ProcessJobInternalAsync(job);
+    }
+
+    public async Task RunProcessAllJobsAsync(string[] commandArgs)
+    {
+        if (commandArgs.Length != 0)
+        {
+            global::System.Console.WriteLine("Usage: process-all-jobs");
+            return;
+        }
+
+        var pendingJobs = await _context.Jobs
+            .Where(x => x.Status == JobStatus.Pending)
+            .OrderBy(x => x.CreatedAt)
+            .ToListAsync();
+
+        if (pendingJobs.Count == 0)
+        {
+            global::System.Console.WriteLine("No pending jobs found.");
+            return;
+        }
+
+        var completed = 0;
+        var failed = 0;
+
+        foreach (var job in pendingJobs)
+        {
+            var success = await ProcessJobInternalAsync(job);
+            if (success)
+            {
+                completed++;
+            }
+            else
+            {
+                failed++;
+            }
+        }
+
+        global::System.Console.WriteLine(
+            $"process-all-jobs summary total={pendingJobs.Count} completed={completed} failed={failed}");
+    }
+
+    private async Task<bool> ProcessJobInternalAsync(Job job)
+    {
+        var workerId = $"console-{Environment.MachineName}-{Environment.ProcessId}";
+
+        if (job.Status is JobStatus.Completed or JobStatus.Running)
+        {
+            global::System.Console.WriteLine($"Job {job.Id} is already {job.Status}.");
+            return false;
+        }
+
+        job.Status = JobStatus.Running;
+        job.WorkerId = workerId;
+        job.StartedAt ??= DateTimeOffset.UtcNow;
+        job.LastHeartbeat = DateTimeOffset.UtcNow;
+        job.LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10);
+        job.ErrorCode = null;
+        job.ErrorMessage = null;
+        job.Progress = 0;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Job started type={job.Type} worker={workerId}");
+
+        try
+        {
+            var result = await ProcessScheduledJobAsync(job);
+            job.Status = JobStatus.Completed;
+            job.Progress = 100;
+            job.ResultJson = result;
+            job.FinishedAt = DateTimeOffset.UtcNow;
+            job.LastHeartbeat = job.FinishedAt;
+            job.LeaseExpiresAt = null;
+            await _context.SaveChangesAsync();
+
+            await AppendJobLogAsync(job.Id, "Info", "Job completed successfully.", result);
+            global::System.Console.WriteLine($"process-job complete id={job.Id} type={job.Type}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await MarkJobTargetFailedAsync(job, ex.Message);
+            job.Status = JobStatus.Failed;
+            job.ErrorCode = "ProcessJobError";
+            job.ErrorMessage = ex.Message;
+            job.FinishedAt = DateTimeOffset.UtcNow;
+            job.LastHeartbeat = job.FinishedAt;
+            job.LeaseExpiresAt = null;
+            await _context.SaveChangesAsync();
+
+            await AppendJobLogAsync(job.Id, "Error", $"Job failed: {ex.Message}");
+            global::System.Console.WriteLine($"process-job failed id={job.Id} error={ex.Message}");
+            return false;
+        }
+    }
+
     public async Task PrintPlaylistListAsync(string[] commandArgs)
     {
         if (commandArgs.Length > 1)
@@ -144,6 +256,369 @@ public class YtService
             var title = string.IsNullOrWhiteSpace(row.Title) ? "-" : row.Title.Trim();
             global::System.Console.WriteLine($"{row.Id}\t{row.Id}\t{title}\t{row.IsFolderExists.ToString().ToLowerInvariant()}");
         }
+    }
+
+    private async Task<string> ProcessScheduledJobAsync(Job job)
+    {
+        if (string.IsNullOrWhiteSpace(job.PayloadJson))
+        {
+            throw new InvalidOperationException("Job payload_json is empty.");
+        }
+
+        var payload = JsonSerializer.Deserialize<ScheduledCommandPayload>(job.PayloadJson);
+        if (payload == null)
+        {
+            throw new InvalidOperationException("Job payload_json could not be deserialized.");
+        }
+
+        var command = payload.Command?.Trim();
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            throw new InvalidOperationException("Job payload command is missing.");
+        }
+
+        return command.ToLowerInvariant() switch
+        {
+            "create-track-loop" => await ProcessCreateTrackLoopJobAsync(job, payload),
+            _ => throw new InvalidOperationException($"Unsupported scheduled command: {command}")
+        };
+    }
+
+    private async Task<string> ProcessCreateTrackLoopJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateTrackLoopJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("create-track-loop arguments are invalid.");
+        }
+
+        var loop = await _context.TrackLoops.FirstOrDefaultAsync(x => x.Id == arguments.LoopId);
+        if (loop == null)
+        {
+            throw new InvalidOperationException($"Track loop not found: {arguments.LoopId}");
+        }
+
+        var track = await _context.Tracks.FirstOrDefaultAsync(x => x.Id == arguments.TrackId && x.PlaylistId == arguments.PlaylistId);
+        if (track == null)
+        {
+            throw new InvalidOperationException($"Track not found: {arguments.TrackId}");
+        }
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            throw new InvalidOperationException("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
+        }
+
+        var playlistRoot = Path.Combine(workingDirectory, arguments.PlaylistId.ToString());
+        if (!Directory.Exists(playlistRoot))
+        {
+            throw new InvalidOperationException($"Playlist folder not found: {playlistRoot}");
+        }
+
+        loop.Status = TrackLoopStatus.InProgress;
+        loop.StartedAtUtc = DateTimeOffset.UtcNow;
+        loop.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Preparing loop work package loop_id={loop.Id} track_position={loop.TrackPosition} loops={loop.LoopCount}");
+
+        var loopsRoot = Path.Combine(playlistRoot, "Loops");
+        var loopRoot = Path.Combine(loopsRoot, loop.Id.ToString());
+        Directory.CreateDirectory(loopRoot);
+
+        loop.SourceAudioPath = ResolvePreferredMediaFile(playlistRoot, loop.TrackPosition, AudioExtensions);
+        loop.SourceImagePath = ResolvePreferredMediaFile(playlistRoot, loop.TrackPosition, ImageExtensions);
+        loop.SourceVideoPath = ResolvePreferredMediaFile(playlistRoot, loop.TrackPosition, [".mp4", ".mov", ".webm"]);
+        loop.ThumbnailPath = ResolvePreferredMediaFile(playlistRoot, loop.TrackPosition, ImageExtensions, "_thumbnail");
+        loop.Title ??= track.Title;
+        loop.Description ??= track.YouTubeTitle;
+
+        if (string.IsNullOrWhiteSpace(loop.SourceVideoPath) || !File.Exists(loop.SourceVideoPath))
+        {
+            throw new InvalidOperationException($"Source video not found for track position {loop.TrackPosition}.");
+        }
+
+        var manifestPath = Path.Combine(loopRoot, "request.json");
+        var concatListPath = Path.Combine(loopRoot, "segments.txt");
+        var outputVideoPath = Path.Combine(loopRoot, $"{loop.TrackPosition}_loop_x{loop.LoopCount}.mp4");
+        var metadata = new
+        {
+            jobId = job.Id,
+            loopId = loop.Id,
+            playlistId = loop.PlaylistId,
+            trackId = loop.TrackId,
+            trackPosition = loop.TrackPosition,
+            loopCount = loop.LoopCount,
+            sourceAudioPath = loop.SourceAudioPath,
+            sourceImagePath = loop.SourceImagePath,
+            sourceVideoPath = loop.SourceVideoPath,
+            thumbnailPath = loop.ThumbnailPath,
+            outputVideoPath,
+            createdAtUtc = DateTimeOffset.UtcNow
+        };
+        var metadataJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+        await File.WriteAllTextAsync(manifestPath, metadataJson);
+
+        var concatLines = Enumerable.Range(0, loop.LoopCount)
+            .Select(_ => $"file '{EscapeConcatFilePath(loop.SourceVideoPath)}'")
+            .ToArray();
+        await File.WriteAllLinesAsync(concatListPath, concatLines);
+
+        await AppendJobLogAsync(job.Id, "Info", $"Rendering loop video output={outputVideoPath}");
+        var ffmpegPath = Environment.GetEnvironmentVariable("FFMPEG_PATH") ?? "ffmpeg";
+        var concatResult = await ExecuteLoopConcatAsync(ffmpegPath, concatListPath, outputVideoPath);
+        if (!concatResult.Success)
+        {
+            throw new InvalidOperationException(concatResult.ErrorMessage);
+        }
+
+        var loopThumbnailPath = await CreateLoopThumbnailAsync(job.Id, loop, track, loopRoot);
+
+        loop.OutputVideoPath = outputVideoPath;
+        loop.ThumbnailPath = loopThumbnailPath;
+        loop.FinishedAtUtc = DateTimeOffset.UtcNow;
+        loop.UpdatedAtUtc = loop.FinishedAtUtc.Value;
+        loop.Status = TrackLoopStatus.Completed;
+        loop.Metadata = JsonSerializer.Serialize(new
+        {
+            requestManifestPath = manifestPath,
+            concatListPath,
+            ffmpegCommand = concatResult.CommandLine,
+            jobId = job.Id,
+            preparedAtUtc = DateTimeOffset.UtcNow,
+            completedAtUtc = loop.FinishedAtUtc,
+            loopThumbnailPath
+        });
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Loop video created output={outputVideoPath} thumbnail={loopThumbnailPath}");
+
+        job.Progress = 100;
+        job.LastHeartbeat = DateTimeOffset.UtcNow;
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            loopId = loop.Id,
+            manifestPath,
+            concatListPath,
+            loopRoot,
+            outputVideoPath,
+            loopThumbnailPath,
+            sourceAudioPath = loop.SourceAudioPath,
+            sourceImagePath = loop.SourceImagePath,
+            sourceVideoPath = loop.SourceVideoPath
+        });
+    }
+
+    private async Task AppendJobLogAsync(Guid jobId, string level, string message, string? metadata = null)
+    {
+        _context.JobLogs.Add(new JobLog
+        {
+            Id = Guid.NewGuid(),
+            JobId = jobId,
+            Level = level,
+            Message = message,
+            Metadata = metadata,
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        });
+
+        await _context.SaveChangesAsync();
+    }
+
+    private async Task MarkJobTargetFailedAsync(Job job, string errorMessage)
+    {
+        if (!string.Equals(job.TargetType, "track_loop", StringComparison.OrdinalIgnoreCase) || job.TargetId is not Guid loopId)
+        {
+            return;
+        }
+
+        var loop = await _context.TrackLoops.FirstOrDefaultAsync(x => x.Id == loopId);
+        if (loop == null)
+        {
+            return;
+        }
+
+        loop.Status = TrackLoopStatus.Failed;
+        loop.FinishedAtUtc = DateTimeOffset.UtcNow;
+        loop.UpdatedAtUtc = loop.FinishedAtUtc.Value;
+        loop.Metadata = JsonSerializer.Serialize(new
+        {
+            lastError = errorMessage,
+            failedAtUtc = loop.FinishedAtUtc
+        });
+
+        await _context.SaveChangesAsync();
+    }
+
+    private static string? ResolvePreferredMediaFile(
+        string playlistRoot,
+        int playlistPosition,
+        IReadOnlyCollection<string> extensions,
+        string? requiredNameSuffix = null)
+    {
+        if (string.IsNullOrWhiteSpace(playlistRoot) || !Directory.Exists(playlistRoot))
+        {
+            return null;
+        }
+
+        var normalizedExtensions = new HashSet<string>(extensions, StringComparer.OrdinalIgnoreCase);
+
+        var candidates = Directory.EnumerateFiles(playlistRoot)
+            .Where(path => normalizedExtensions.Contains(Path.GetExtension(path)))
+            .Select(path => new
+            {
+                Path = path,
+                VariantOrder = GetMediaVariantOrder(Path.GetFileNameWithoutExtension(path), playlistPosition, requiredNameSuffix)
+            })
+            .Where(x => x.VariantOrder.HasValue)
+            .OrderBy(x => x.VariantOrder!.Value)
+            .ThenBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return candidates.Count == 0 ? null : candidates[0].Path;
+    }
+
+    private static int? GetMediaVariantOrder(string fileNameWithoutExtension, int playlistPosition, string? requiredNameSuffix)
+    {
+        var positionPrefix = playlistPosition.ToString();
+        var expectedBase = string.IsNullOrWhiteSpace(requiredNameSuffix)
+            ? positionPrefix
+            : $"{positionPrefix}{requiredNameSuffix}";
+
+        if (fileNameWithoutExtension.Equals(expectedBase, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        var escapedSuffix = string.IsNullOrWhiteSpace(requiredNameSuffix)
+            ? string.Empty
+            : Regex.Escape(requiredNameSuffix);
+        var match = Regex.Match(
+            fileNameWithoutExtension,
+            $"^{Regex.Escape(positionPrefix)}{escapedSuffix}_(\\d+)$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        return int.TryParse(match.Groups[1].Value, out var parsed) ? parsed : null;
+    }
+
+    private static string EscapeConcatFilePath(string filePath)
+    {
+        return filePath.Replace("\\", "\\\\").Replace("'", "'\\''");
+    }
+
+    private static async Task<LoopConcatResult> ExecuteLoopConcatAsync(string ffmpegPath, string concatListPath, string outputVideoPath)
+    {
+        var args = new[]
+        {
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concatListPath,
+            "-c", "copy",
+            outputVideoPath
+        };
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = ffmpegPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var process = new Process { StartInfo = startInfo };
+        process.Start();
+        var stdOut = await process.StandardOutput.ReadToEndAsync();
+        var stdErr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        var commandLine = $"{ffmpegPath} {string.Join(" ", args.Select(QuoteCommandArgument))}";
+        if (process.ExitCode != 0)
+        {
+            var error = string.IsNullOrWhiteSpace(stdErr) ? stdOut.Trim() : stdErr.Trim();
+            return new LoopConcatResult(false, commandLine, string.IsNullOrWhiteSpace(error) ? $"ffmpeg exited with code {process.ExitCode}" : error);
+        }
+
+        return new LoopConcatResult(true, commandLine, null);
+    }
+
+    private async Task<string?> CreateLoopThumbnailAsync(Guid jobId, TrackLoop loop, Track track, string loopRoot)
+    {
+        var imagePath = loop.SourceImagePath;
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+        {
+            await AppendJobLogAsync(jobId, "Warning", "Loop thumbnail skipped because source image is missing.");
+            return null;
+        }
+
+        var extension = Path.GetExtension(imagePath);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = ".jpg";
+        }
+
+        var outputPath = Path.Combine(loopRoot, $"{loop.TrackPosition}_loop_x{loop.LoopCount}_thumbnail{extension.ToLowerInvariant()}");
+        if (File.Exists(outputPath))
+        {
+            File.Delete(outputPath);
+        }
+
+        var visualStyleHint = TryGetMetadataString(track.Metadata, "visualStyleHint");
+        var headlineFont = ResolveThumbnailHeadlineFont(Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE_FONT"), visualStyleHint);
+        var subheadlineFont = ResolveThumbnailSubheadlineFont(Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE_FONT"), visualStyleHint);
+
+        var request = new CreateYoutubeThumbnailRequest
+        {
+            ImagePath = imagePath,
+            LogoPath = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_LOGO_PATH"),
+            Headline = "LOOP",
+            Subheadline = track.Title,
+            OutputPath = outputPath,
+            Style = new CreateYoutubeThumbnailStyleRequest
+            {
+                HeadlineFont = headlineFont,
+                SubheadlineFont = subheadlineFont,
+                HeadlineColor = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_HEADLINE_COLOR"),
+                SubheadlineColor = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE_COLOR"),
+                Shadow = true,
+                Stroke = true
+            }
+        };
+
+        var service = new YoutubeThumbnailService();
+        var response = await service.CreateAsync(request, CancellationToken.None);
+        if (!response.Ok)
+        {
+            throw new InvalidOperationException("Loop thumbnail generation returned ok=false.");
+        }
+
+        return response.OutputPath;
+    }
+
+    private static string QuoteCommandArgument(string arg)
+    {
+        if (string.IsNullOrEmpty(arg))
+        {
+            return "\"\"";
+        }
+
+        return arg.Any(char.IsWhiteSpace) || arg.Contains('"')
+            ? $"\"{arg.Replace("\"", "\\\"")}\""
+            : arg;
     }
 
     public async Task RunGenerateMediaAsync(string[] commandArgs)
@@ -6313,6 +6788,8 @@ public class YtService
         public static YoutubeAddVideosResult Ok(int addedCount) => new(true, addedCount, null);
         public static YoutubeAddVideosResult Fail(string errorMessage) => new(false, 0, errorMessage);
     }
+
+    private sealed record LoopConcatResult(bool Success, string CommandLine, string? ErrorMessage);
 
     private sealed record PromptMetadata(string? ImagePrompt, string? SunoPrompt);
 

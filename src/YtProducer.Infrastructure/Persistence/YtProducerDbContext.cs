@@ -16,6 +16,8 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<Job> Jobs => Set<Job>();
 
+    public DbSet<JobLog> JobLogs => Set<JobLog>();
+
     public DbSet<YoutubePlaylist> YoutubePlaylists => Set<YoutubePlaylist>();
 
     public DbSet<YoutubeUploadQueue> YoutubeUploadQueues => Set<YoutubeUploadQueue>();
