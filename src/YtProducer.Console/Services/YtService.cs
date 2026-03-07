@@ -298,6 +298,12 @@ public class YtService
             throw new InvalidOperationException($"Track loop not found: {arguments.LoopId}");
         }
 
+        var playlist = await _context.Playlists.FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
         var track = await _context.Tracks.FirstOrDefaultAsync(x => x.Id == arguments.TrackId && x.PlaylistId == arguments.PlaylistId);
         if (track == null)
         {
@@ -316,6 +322,12 @@ public class YtService
             throw new InvalidOperationException($"Playlist folder not found: {playlistRoot}");
         }
 
+        var loopWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_LOOP_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(loopWorkingDirectory))
+        {
+            throw new InvalidOperationException("YT_PRODUCER_LOOP_WORKING_DIRECTORY is not configured.");
+        }
+
         loop.Status = TrackLoopStatus.InProgress;
         loop.StartedAtUtc = DateTimeOffset.UtcNow;
         loop.UpdatedAtUtc = DateTimeOffset.UtcNow;
@@ -323,7 +335,8 @@ public class YtService
 
         await AppendJobLogAsync(job.Id, "Info", $"Preparing loop work package loop_id={loop.Id} track_position={loop.TrackPosition} loops={loop.LoopCount}");
 
-        var loopsRoot = Path.Combine(playlistRoot, "Loops");
+        Directory.CreateDirectory(loopWorkingDirectory);
+        var loopsRoot = Path.Combine(loopWorkingDirectory, arguments.PlaylistId.ToString());
         var loopRoot = Path.Combine(loopsRoot, loop.Id.ToString());
         Directory.CreateDirectory(loopRoot);
 
@@ -373,7 +386,7 @@ public class YtService
             throw new InvalidOperationException(concatResult.ErrorMessage);
         }
 
-        var loopThumbnailPath = await CreateLoopThumbnailAsync(job.Id, loop, track, loopRoot);
+        var loopThumbnailPath = await CreateLoopThumbnailAsync(job.Id, loop, track, playlist, loopRoot);
 
         loop.OutputVideoPath = outputVideoPath;
         loop.ThumbnailPath = loopThumbnailPath;
@@ -556,7 +569,7 @@ public class YtService
         return new LoopConcatResult(true, commandLine, null);
     }
 
-    private async Task<string?> CreateLoopThumbnailAsync(Guid jobId, TrackLoop loop, Track track, string loopRoot)
+    private async Task<string?> CreateLoopThumbnailAsync(Guid jobId, TrackLoop loop, Track track, Playlist playlist, string loopRoot)
     {
         var imagePath = loop.SourceImagePath;
         if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
@@ -586,7 +599,10 @@ public class YtService
             ImagePath = imagePath,
             LogoPath = Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_LOGO_PATH"),
             Headline = "LOOP",
-            Subheadline = track.Title,
+            Subheadline = ResolveThumbnailSubheadline(
+                track,
+                playlist,
+                Environment.GetEnvironmentVariable("YT_PRODUCER_THUMBNAIL_SUBHEADLINE")),
             OutputPath = outputPath,
             Style = new CreateYoutubeThumbnailStyleRequest
             {

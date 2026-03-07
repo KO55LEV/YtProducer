@@ -46,6 +46,7 @@ app.MapGet("/health", async (CancellationToken cancellationToken) =>
 
 app.MapPlaylistEndpoints();
 app.MapJobEndpoints();
+app.MapLoopEndpoints();
 app.MapYoutubePlaylistEndpoints();
 app.MapYoutubeUploadQueueEndpoints();
 app.MapYoutubePublishingEndpoints();

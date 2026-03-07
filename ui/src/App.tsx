@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Header from "./components/Header";
+import CreateLoop from "./pages/CreateLoop";
 import ListManager from "./pages/ListManager";
 import PlaylistDetail from "./pages/PlaylistDetail";
 import YoutubePlaylists from "./pages/YoutubePlaylists";
@@ -13,6 +14,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<ListManager />} />
             <Route path="/playlists/:id" element={<PlaylistDetail />} />
+            <Route path="/create-loop" element={<CreateLoop />} />
             <Route path="/youtube-playlists" element={<YoutubePlaylists />} />
           </Routes>
         </main>

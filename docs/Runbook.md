@@ -19,6 +19,8 @@ dotnet run   -- playlist_init
 // playlist status becomes FolderCreated
 dotnet run   -- playlist_init <playlistId>
 
+// generated loop assets are written under YT_PRODUCER_LOOP_WORKING_DIRECTORY/<playlistId>/<loopId>/
+
 // schedule visualizer renders from existing playlist folders
 // requires YT_PRODUCER_MCP_MEDIA_WORKING_DIRECTORY and YT_PRODUCER_MCP_MEDIA_PROJECT in .env
 // optional: YT_PRODUCER_MEDIA_PARALLELISM (default 3)
