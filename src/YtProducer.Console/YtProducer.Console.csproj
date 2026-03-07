@@ -22,6 +22,7 @@
     <ProjectReference Include="..\YtProducer.Infrastructure\YtProducer.Infrastructure.csproj" />
     <ProjectReference Include="..\YtProducer.Domain\YtProducer.Domain.csproj" />
     <ProjectReference Include="..\YtProducer.Contracts\YtProducer.Contracts.csproj" />
+    <ProjectReference Include="..\YtProducer.Media\YtProducer.Media.csproj" />
   </ItemGroup>
 
 </Project>
