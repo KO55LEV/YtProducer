@@ -1,8 +1,23 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import type { Playlist } from "../types";
+import type { Playlist, PlaylistMediaResponse } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
+
+function resolveMediaUrl(url: string): string {
+  return url.startsWith("http") ? url : `${apiBaseUrl}${url}`;
+}
+
+function pickPlaylistPreviewImages(media: PlaylistMediaResponse): string[] {
+  return media.tracks
+    .sort((a, b) => a.playlistPosition - b.playlistPosition)
+    .flatMap((track) =>
+      track.images
+        .filter((image) => !/_thumbnail(?:_\d+)?\.[^.]+$/i.test(image.fileName))
+        .map((image) => resolveMediaUrl(image.url))
+    )
+    .slice(0, 4);
+}
 
 function statusClassName(status: string): string {
   switch (status.toLowerCase()) {
@@ -35,9 +50,10 @@ export default function ListManager() {
   const [uploading, setUploading] = useState(false);
   const [startingByPlaylistId, setStartingByPlaylistId] = useState<Record<string, boolean>>({});
   const [startJobIdByPlaylistId, setStartJobIdByPlaylistId] = useState<Record<string, string>>({});
+  const [previewImagesByPlaylistId, setPreviewImagesByPlaylistId] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
-    fetchPlaylists();
+    void fetchPlaylists();
   }, []);
 
   async function fetchPlaylists(): Promise<void> {
@@ -51,12 +67,33 @@ export default function ListManager() {
 
       const data = (await response.json()) as Playlist[];
       setPlaylists(data);
+      void fetchPlaylistPreviewImages(data);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function fetchPlaylistPreviewImages(items: Playlist[]): Promise<void> {
+    const previews = await Promise.all(
+      items.map(async (playlist) => {
+        try {
+          const response = await fetch(`${apiBaseUrl}/playlists/${playlist.id}/media`);
+          if (!response.ok) {
+            return [playlist.id, []] as const;
+          }
+
+          const media = (await response.json()) as PlaylistMediaResponse;
+          return [playlist.id, pickPlaylistPreviewImages(media)] as const;
+        } catch {
+          return [playlist.id, []] as const;
+        }
+      })
+    );
+
+    setPreviewImagesByPlaylistId(Object.fromEntries(previews));
   }
 
   async function handleFileUpload(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
@@ -211,6 +248,28 @@ export default function ListManager() {
                 }
               }}
             >
+              <div className="playlist-card-media">
+                {previewImagesByPlaylistId[playlist.id]?.length ? (
+                  <div
+                    className={`playlist-card-collage playlist-card-collage-count-${previewImagesByPlaylistId[playlist.id].length}`}
+                  >
+                    {previewImagesByPlaylistId[playlist.id].map((imageUrl, index) => (
+                      <div
+                        key={`${playlist.id}-${index}`}
+                        className={`playlist-card-collage-tile playlist-card-collage-tile-${index + 1}`}
+                      >
+                        <img src={imageUrl} alt="" loading="lazy" />
+                      </div>
+                    ))}
+                    <div className="playlist-card-collage-overlay" />
+                  </div>
+                ) : (
+                  <div className="playlist-card-collage playlist-card-collage-empty">
+                    <div className="playlist-card-collage-overlay" />
+                    <span className="playlist-card-collage-label">Playlist Visual Mix</span>
+                  </div>
+                )}
+              </div>
               <div className="playlist-card-header">
                 <h3 className="playlist-title">{playlist.title}</h3>
                 <span className={statusClassName(playlist.status)}>{playlist.status}</span>

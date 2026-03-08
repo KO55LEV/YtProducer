@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { PromptGeneration, PromptTemplate } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
@@ -59,82 +59,109 @@ async function readApiError(response: Response, fallback: string): Promise<strin
   }
 }
 
+async function loadPromptTemplate(templateId: string): Promise<PromptTemplate> {
+  const response = await fetch(`${apiBaseUrl}/prompt-templates/${templateId}`);
+  if (!response.ok) {
+    throw new Error(await readApiError(response, `Template request failed with status ${response.status}`));
+  }
+
+  return (await response.json()) as PromptTemplate;
+}
+
+async function createPromptGeneration(template: PromptTemplate, theme: string): Promise<PromptGeneration> {
+  const response = await fetch(`${apiBaseUrl}/prompt-templates/${template.id}/generations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      theme: theme.trim(),
+      model: template.defaultModel || null
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, `Create generation failed with status ${response.status}`));
+  }
+
+  return (await response.json()) as PromptGeneration;
+}
+
+async function savePromptGenerationOutput(generationId: string, rawText: string): Promise<void> {
+  const response = await fetch(`${apiBaseUrl}/prompt-generations/${generationId}/outputs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rawText: rawText.trim(),
+      outputType: "album_json"
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, `Save manual output failed with status ${response.status}`));
+  }
+}
+
+function TemplateForm({
+  templateForm,
+  setTemplateForm
+}: {
+  templateForm: typeof emptyTemplateForm;
+  setTemplateForm: Dispatch<SetStateAction<typeof emptyTemplateForm>>;
+}) {
+  return (
+    <div className="prompt-form-grid">
+      <label className="prompt-field">
+        <span>Name</span>
+        <input value={templateForm.name} onChange={(e) => setTemplateForm((c) => ({ ...c, name: e.target.value }))} />
+      </label>
+      <label className="prompt-field">
+        <span>Slug</span>
+        <input value={templateForm.slug} onChange={(e) => setTemplateForm((c) => ({ ...c, slug: e.target.value }))} />
+      </label>
+      <label className="prompt-field">
+        <span>Category</span>
+        <input value={templateForm.category} onChange={(e) => setTemplateForm((c) => ({ ...c, category: e.target.value }))} />
+      </label>
+      <label className="prompt-field">
+        <span>Default Model</span>
+        <input value={templateForm.defaultModel} onChange={(e) => setTemplateForm((c) => ({ ...c, defaultModel: e.target.value }))} />
+      </label>
+      <label className="prompt-field">
+        <span>Input Mode</span>
+        <input value={templateForm.inputMode} onChange={(e) => setTemplateForm((c) => ({ ...c, inputMode: e.target.value }))} />
+      </label>
+      <label className="prompt-field">
+        <span>Sort Order</span>
+        <input
+          type="number"
+          value={templateForm.sortOrder}
+          onChange={(e) => setTemplateForm((c) => ({ ...c, sortOrder: Number.parseInt(e.target.value || "0", 10) || 0 }))}
+        />
+      </label>
+      <label className="prompt-field prompt-field-full">
+        <span>Description</span>
+        <input value={templateForm.description} onChange={(e) => setTemplateForm((c) => ({ ...c, description: e.target.value }))} />
+      </label>
+      <label className="prompt-field prompt-field-full">
+        <span>Template Body</span>
+        <textarea
+          rows={20}
+          value={templateForm.templateBody}
+          onChange={(e) => setTemplateForm((c) => ({ ...c, templateBody: e.target.value }))}
+        />
+      </label>
+    </div>
+  );
+}
+
 export default function AlbumTemplates() {
   const navigate = useNavigate();
-  const { id } = useParams<{ id?: string }>();
-  const isNewTemplate = id === "new";
-  const isListView = !id;
-
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
-  const [generations, setGenerations] = useState<PromptGeneration[]>([]);
-  const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(null);
-  const [templateForm, setTemplateForm] = useState(emptyTemplateForm);
-  const [theme, setTheme] = useState("");
   const [loading, setLoading] = useState(true);
-  const [generationsLoading, setGenerationsLoading] = useState(false);
-  const [savingTemplate, setSavingTemplate] = useState(false);
-  const [creatingGeneration, setCreatingGeneration] = useState(false);
-  const [savingManualOutput, setSavingManualOutput] = useState(false);
-  const [manualOutputText, setManualOutputText] = useState("");
-  const [copyingPrompt, setCopyingPrompt] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const selectedTemplate = useMemo(() => {
-    if (!id || isNewTemplate) {
-      return null;
-    }
-
-    return templates.find((item) => item.id === id) ?? null;
-  }, [templates, id, isNewTemplate]);
-
-  const selectedGeneration = useMemo(
-    () => generations.find((item) => item.id === selectedGenerationId) ?? null,
-    [generations, selectedGenerationId]
-  );
-
-  const latestOutput = selectedGeneration?.outputs[0] ?? null;
-  const resolvedPromptPreview = buildResolvedPromptPreview(templateForm.templateBody, theme);
 
   useEffect(() => {
     void loadTemplates();
   }, []);
-
-  useEffect(() => {
-    if (isListView) {
-      return;
-    }
-
-    if (isNewTemplate) {
-      setTemplateForm(emptyTemplateForm);
-      setGenerations([]);
-      setSelectedGenerationId(null);
-      setTheme("");
-      return;
-    }
-
-    if (!selectedTemplate) {
-      return;
-    }
-
-    setTemplateForm({
-      name: selectedTemplate.name,
-      slug: selectedTemplate.slug,
-      category: selectedTemplate.category,
-      description: selectedTemplate.description ?? "",
-      templateBody: selectedTemplate.templateBody,
-      inputMode: selectedTemplate.inputMode,
-      defaultModel: selectedTemplate.defaultModel ?? "",
-      isActive: selectedTemplate.isActive,
-      sortOrder: selectedTemplate.sortOrder
-    });
-
-    setTheme("");
-    void loadGenerations(selectedTemplate.id);
-  }, [selectedTemplate, isNewTemplate, isListView]);
-
-  useEffect(() => {
-    setManualOutputText(latestOutput?.rawText ?? "");
-  }, [latestOutput?.id]);
 
   async function loadTemplates(): Promise<void> {
     try {
@@ -149,6 +176,253 @@ export default function AlbumTemplates() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load templates");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="page-content">
+      <div className="page-header-section album-template-index-header">
+        <div>
+          <h1 className="page-title">Album Templates</h1>
+          <p className="page-subtitle">Choose a template, edit it separately, or open the generation workspace.</p>
+        </div>
+        <div className="header-actions">
+          <Link to="/album-templates/new" className="btn btn-primary">
+            New Template
+          </Link>
+        </div>
+      </div>
+
+      {error && (
+        <div className="alert alert-error">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="loading-state">
+          <div className="spinner"></div>
+          <p>Loading templates...</p>
+        </div>
+      ) : (
+        <div className="template-gallery">
+          {templates.map((template) => (
+            <article key={template.id} className="template-gallery-card">
+              <div className="template-gallery-top">
+                <div>
+                  <h2>{template.name}</h2>
+                  <p className="template-gallery-slug">{template.slug}</p>
+                </div>
+                <span className={`badge badge-${template.isActive ? "success" : "secondary"}`}>
+                  {template.isActive ? "Active" : "Inactive"}
+                </span>
+              </div>
+              <p className="template-gallery-description">{template.description || "No description provided."}</p>
+              <div className="template-gallery-meta">
+                <span>{template.category}</span>
+                <span>{template.defaultModel ?? "No model"}</span>
+                <span>v{template.version}</span>
+              </div>
+              <div className="template-gallery-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => navigate(`/album-templates/${template.id}/edit`)}>
+                  Edit Template
+                </button>
+                <button type="button" className="btn btn-primary" onClick={() => navigate(`/album-templates/${template.id}/generations`)}>
+                  Request Generation
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function AlbumTemplateEditor() {
+  const navigate = useNavigate();
+  const { id } = useParams<{ id?: string }>();
+  const isNewTemplate = !id;
+
+  const [templateForm, setTemplateForm] = useState(emptyTemplateForm);
+  const [template, setTemplate] = useState<PromptTemplate | null>(null);
+  const [loading, setLoading] = useState(!isNewTemplate);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isNewTemplate) {
+      setTemplateForm(emptyTemplateForm);
+      setTemplate(null);
+      setLoading(false);
+      return;
+    }
+
+    void loadTemplate(id);
+  }, [id, isNewTemplate]);
+
+  async function loadTemplate(templateId?: string): Promise<void> {
+    if (!templateId) return;
+
+    try {
+      setLoading(true);
+      const response = await fetch(`${apiBaseUrl}/prompt-templates/${templateId}`);
+      if (!response.ok) {
+        throw new Error(`Template request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as PromptTemplate;
+      setTemplate(data);
+      setTemplateForm({
+        name: data.name,
+        slug: data.slug,
+        category: data.category,
+        description: data.description ?? "",
+        templateBody: data.templateBody,
+        inputMode: data.inputMode,
+        defaultModel: data.defaultModel ?? "",
+        isActive: data.isActive,
+        sortOrder: data.sortOrder
+      });
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load template");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSaveTemplate(): Promise<void> {
+    try {
+      setSavingTemplate(true);
+      setError(null);
+
+      const payload = {
+        ...templateForm,
+        defaultModel: templateForm.defaultModel || null
+      };
+
+      const response = await fetch(
+        template ? `${apiBaseUrl}/prompt-templates/${template.id}` : `${apiBaseUrl}/prompt-templates`,
+        {
+          method: template ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, `Save template failed with status ${response.status}`));
+      }
+
+      const saved = (await response.json()) as PromptTemplate;
+      navigate(`/album-templates/${saved.id}/edit`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save template");
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="page-content">
+        <div className="loading-state">
+          <div className="spinner"></div>
+          <p>Loading template...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-content">
+      <div className="page-header-section album-template-detail-header">
+        <div>
+          <Link to="/album-templates" className="breadcrumb">
+            ← Back to Templates
+          </Link>
+          <h1 className="page-title">{template?.name ?? "New Template"}</h1>
+          <p className="page-subtitle">Create or edit the prompt template only. Generation is handled on a separate page.</p>
+        </div>
+        <div className="header-actions">
+          {template && (
+            <Link to={`/album-templates/${template.id}/generations`} className="btn btn-secondary">
+              Request Generation
+            </Link>
+          )}
+          <button type="button" className="btn btn-primary" onClick={handleSaveTemplate} disabled={savingTemplate}>
+            {savingTemplate ? "Saving..." : "Save Template"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="alert alert-error">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      <div className="template-page-stack">
+        <section className="prompt-card-shell">
+          <div className="prompt-card-header">
+            <div>
+              <h2 className="section-title">Template Editor</h2>
+              <p className="prompt-card-subtitle">This page is only for editing the reusable template definition.</p>
+            </div>
+          </div>
+
+          <TemplateForm templateForm={templateForm} setTemplateForm={setTemplateForm} />
+        </section>
+      </div>
+    </div>
+  );
+}
+
+export function AlbumTemplateGenerations() {
+  const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
+  const [template, setTemplate] = useState<PromptTemplate | null>(null);
+  const [generations, setGenerations] = useState<PromptGeneration[]>([]);
+  const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(null);
+  const [theme, setTheme] = useState("");
+  const [manualOutputText, setManualOutputText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [generationsLoading, setGenerationsLoading] = useState(false);
+  const [creatingGeneration, setCreatingGeneration] = useState(false);
+  const [savingManualOutput, setSavingManualOutput] = useState(false);
+  const [copyingPrompt, setCopyingPrompt] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedGeneration = useMemo(
+    () => generations.find((item) => item.id === selectedGenerationId) ?? null,
+    [generations, selectedGenerationId]
+  );
+
+  const latestOutput = selectedGeneration?.outputs[0] ?? null;
+  const resolvedPromptPreview = buildResolvedPromptPreview(template?.templateBody ?? "", theme);
+
+  useEffect(() => {
+    void loadTemplateAndGenerations();
+  }, [id]);
+
+  useEffect(() => {
+    setManualOutputText(latestOutput?.rawText ?? "");
+  }, [latestOutput?.id]);
+
+  async function loadTemplateAndGenerations(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setLoading(true);
+      const templateData = await loadPromptTemplate(id);
+      setTemplate(templateData);
+      setError(null);
+      await loadGenerations(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load generation workspace");
     } finally {
       setLoading(false);
     }
@@ -178,61 +452,14 @@ export default function AlbumTemplates() {
     }
   }
 
-  async function handleSaveTemplate(): Promise<void> {
-    try {
-      setSavingTemplate(true);
-      setError(null);
-
-      const payload = {
-        ...templateForm,
-        defaultModel: templateForm.defaultModel || null
-      };
-
-      const response = await fetch(
-        selectedTemplate ? `${apiBaseUrl}/prompt-templates/${selectedTemplate.id}` : `${apiBaseUrl}/prompt-templates`,
-        {
-          method: selectedTemplate ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`Save template failed with status ${response.status}`);
-      }
-
-      const saved = (await response.json()) as PromptTemplate;
-      await loadTemplates();
-      navigate(`/album-templates/${saved.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save template");
-    } finally {
-      setSavingTemplate(false);
-    }
-  }
-
   async function handleCreateGeneration(): Promise<void> {
-    if (!selectedTemplate || !theme.trim()) return;
+    if (!template || !theme.trim()) return;
 
     try {
       setCreatingGeneration(true);
       setError(null);
-
-      const response = await fetch(`${apiBaseUrl}/prompt-templates/${selectedTemplate.id}/generations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          theme: theme.trim(),
-          model: templateForm.defaultModel || null
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Create generation failed with status ${response.status}`);
-      }
-
-      const created = (await response.json()) as PromptGeneration;
-      await loadGenerations(selectedTemplate.id);
+      const created = await createPromptGeneration(template, theme);
+      await loadGenerations(template.id);
       setSelectedGenerationId(created.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create generation");
@@ -242,8 +469,8 @@ export default function AlbumTemplates() {
   }
 
   async function handleRefreshGenerations(): Promise<void> {
-    if (!selectedTemplate) return;
-    await loadGenerations(selectedTemplate.id);
+    if (!template) return;
+    await loadGenerations(template.id);
   }
 
   async function handleCopyPrompt(): Promise<void> {
@@ -265,20 +492,7 @@ export default function AlbumTemplates() {
     try {
       setSavingManualOutput(true);
       setError(null);
-
-      const response = await fetch(`${apiBaseUrl}/prompt-generations/${selectedGeneration.id}/outputs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rawText: manualOutputText.trim(),
-          outputType: "album_json"
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(await readApiError(response, `Save manual output failed with status ${response.status}`));
-      }
-
+      await savePromptGenerationOutput(selectedGeneration.id, manualOutputText);
       await handleRefreshGenerations();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save manual output");
@@ -287,69 +501,18 @@ export default function AlbumTemplates() {
     }
   }
 
-  if (isListView) {
+  if (loading) {
     return (
       <div className="page-content">
-        <div className="page-header-section album-template-index-header">
-          <div>
-            <h1 className="page-title">Album Templates</h1>
-            <p className="page-subtitle">Choose a prompt style first. Editing, generation, and output review happen inside the template.</p>
-          </div>
-          <div className="header-actions">
-            <Link to="/album-templates/new" className="btn btn-primary">
-              New Template
-            </Link>
-          </div>
+        <div className="loading-state">
+          <div className="spinner"></div>
+          <p>Loading generation workspace...</p>
         </div>
-
-        {error && (
-          <div className="alert alert-error">
-            <strong>Error:</strong> {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div className="loading-state">
-            <div className="spinner"></div>
-            <p>Loading templates...</p>
-          </div>
-        ) : (
-          <div className="template-gallery">
-            {templates.map((template) => (
-              <button
-                key={template.id}
-                type="button"
-                className="template-gallery-card"
-                onClick={() => navigate(`/album-templates/${template.id}`)}
-              >
-                <div className="template-gallery-top">
-                  <div>
-                    <h2>{template.name}</h2>
-                    <p className="template-gallery-slug">{template.slug}</p>
-                  </div>
-                  <span className={`badge badge-${template.isActive ? "success" : "secondary"}`}>
-                    {template.isActive ? "Active" : "Inactive"}
-                  </span>
-                </div>
-                <p className="template-gallery-description">{template.description || "No description provided."}</p>
-                <div className="template-gallery-meta">
-                  <span>{template.category}</span>
-                  <span>{template.defaultModel ?? "No model"}</span>
-                  <span>v{template.version}</span>
-                </div>
-                <div className="template-gallery-footer">
-                  <span>{template.inputMode.replace("_", " ")}</span>
-                  <span className="template-gallery-link">Open</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     );
   }
 
-  if (!isNewTemplate && !loading && !selectedTemplate) {
+  if (!template) {
     return (
       <div className="page-content">
         <div className="empty-state">
@@ -363,9 +526,6 @@ export default function AlbumTemplates() {
     );
   }
 
-  const templateName = selectedTemplate?.name ?? "New Template";
-  const templateOutputCount = countValidOutputs(generations);
-
   return (
     <div className="page-content">
       <div className="page-header-section album-template-detail-header">
@@ -373,16 +533,22 @@ export default function AlbumTemplates() {
           <Link to="/album-templates" className="breadcrumb">
             ← Back to Templates
           </Link>
-          <h1 className="page-title">{templateName}</h1>
-          <p className="page-subtitle">
-            {selectedTemplate
-              ? "Update the reusable prompt, create themed generations, and inspect returned JSON."
-              : "Create a reusable prompt template for a new album style."}
-          </p>
+          <h1 className="page-title">{template.name}</h1>
+          <p className="page-subtitle">Request generation runs here and review saved outputs separately from template editing.</p>
         </div>
         <div className="header-actions">
-          <button type="button" className="btn btn-primary" onClick={handleSaveTemplate} disabled={savingTemplate}>
-            {savingTemplate ? "Saving..." : "Save Template"}
+          <Link to={`/album-templates/${template.id}/edit`} className="btn btn-secondary">
+            Edit Template
+          </Link>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => navigate(`/album-templates/${template.id}/manual${theme.trim() ? `?theme=${encodeURIComponent(theme.trim())}` : ""}`)}
+          >
+            Manual Response Upload
+          </button>
+          <button type="button" className="btn btn-primary" onClick={handleRefreshGenerations} disabled={generationsLoading}>
+            Refresh
           </button>
         </div>
       </div>
@@ -398,68 +564,16 @@ export default function AlbumTemplates() {
           <section className="prompt-card-shell">
             <div className="prompt-card-header">
               <div>
-                <h2 className="section-title">Template Editor</h2>
-                <p className="prompt-card-subtitle">This defines the reusable album-generation style.</p>
-              </div>
-            </div>
-
-            <div className="prompt-form-grid">
-              <label className="prompt-field">
-                <span>Name</span>
-                <input value={templateForm.name} onChange={(e) => setTemplateForm((c) => ({ ...c, name: e.target.value }))} />
-              </label>
-              <label className="prompt-field">
-                <span>Slug</span>
-                <input value={templateForm.slug} onChange={(e) => setTemplateForm((c) => ({ ...c, slug: e.target.value }))} />
-              </label>
-              <label className="prompt-field">
-                <span>Category</span>
-                <input value={templateForm.category} onChange={(e) => setTemplateForm((c) => ({ ...c, category: e.target.value }))} />
-              </label>
-              <label className="prompt-field">
-                <span>Default Model</span>
-                <input value={templateForm.defaultModel} onChange={(e) => setTemplateForm((c) => ({ ...c, defaultModel: e.target.value }))} />
-              </label>
-              <label className="prompt-field">
-                <span>Input Mode</span>
-                <input value={templateForm.inputMode} onChange={(e) => setTemplateForm((c) => ({ ...c, inputMode: e.target.value }))} />
-              </label>
-              <label className="prompt-field">
-                <span>Sort Order</span>
-                <input
-                  type="number"
-                  value={templateForm.sortOrder}
-                  onChange={(e) => setTemplateForm((c) => ({ ...c, sortOrder: Number.parseInt(e.target.value || "0", 10) || 0 }))}
-                />
-              </label>
-              <label className="prompt-field prompt-field-full">
-                <span>Description</span>
-                <input value={templateForm.description} onChange={(e) => setTemplateForm((c) => ({ ...c, description: e.target.value }))} />
-              </label>
-              <label className="prompt-field prompt-field-full">
-                <span>Template Body</span>
-                <textarea
-                  rows={20}
-                  value={templateForm.templateBody}
-                  onChange={(e) => setTemplateForm((c) => ({ ...c, templateBody: e.target.value }))}
-                />
-              </label>
-            </div>
-          </section>
-
-          <section className="prompt-card-shell">
-            <div className="prompt-card-header">
-              <div>
-                <h2 className="section-title">Generate</h2>
-                <p className="prompt-card-subtitle">Runtime input stays simple. You only provide the theme.</p>
+                <h2 className="section-title">Generate Part</h2>
+                <p className="prompt-card-subtitle">Provide the theme and request a new generation run.</p>
               </div>
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={handleCreateGeneration}
-                disabled={!selectedTemplate || !theme.trim() || creatingGeneration}
+                disabled={!theme.trim() || creatingGeneration}
               >
-                {creatingGeneration ? "Creating..." : "Create Generation"}
+                {creatingGeneration ? "Requesting..." : "Request Generation"}
               </button>
             </div>
 
@@ -488,21 +602,13 @@ export default function AlbumTemplates() {
             </div>
           </section>
 
-          {selectedGeneration && (
+          {selectedGeneration ? (
             <section className="prompt-card-shell template-output-section">
               <div className="prompt-card-header">
                 <div>
                   <h2 className="section-title">Generation Output</h2>
-                  <p className="prompt-card-subtitle">Job-processed result stored in the database for this generation.</p>
+                  <p className="prompt-card-subtitle">Inspect the selected run, paste a manual result, and review validation state.</p>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={handleRefreshGenerations}
-                  disabled={!selectedTemplate || generationsLoading}
-                >
-                  Refresh
-                </button>
               </div>
 
               <div className="prompt-output-layout">
@@ -527,10 +633,6 @@ export default function AlbumTemplates() {
                     <div>
                       <span className="job-summary-label">Job Id</span>
                       <span className="job-summary-value">{selectedGeneration.jobId ?? "—"}</span>
-                    </div>
-                    <div>
-                      <span className="job-summary-label">Started</span>
-                      <span className="job-summary-value">{formatDate(selectedGeneration.startedAtUtc)}</span>
                     </div>
                     <div>
                       <span className="job-summary-label">Finished</span>
@@ -601,6 +703,13 @@ export default function AlbumTemplates() {
                 </label>
               </div>
             </section>
+          ) : (
+            <section className="prompt-card-shell">
+              <div className="empty-state compact-empty">
+                <h3>No generation selected</h3>
+                <p>Request a generation or select one from the list to inspect its output.</p>
+              </div>
+            </section>
           )}
         </section>
 
@@ -609,28 +718,28 @@ export default function AlbumTemplates() {
             <div className="prompt-card-header">
               <div>
                 <h2 className="section-title">Template Summary</h2>
-                <p className="prompt-card-subtitle">Quick state and usage snapshot.</p>
+                <p className="prompt-card-subtitle">Quick state and generation snapshot.</p>
               </div>
             </div>
 
             <div className="album-template-summary-list">
               <div className="album-template-summary-item">
                 <span className="job-summary-label">Status</span>
-                <span className={`badge badge-${templateForm.isActive ? "success" : "secondary"}`}>
-                  {templateForm.isActive ? "Active" : "Inactive"}
+                <span className={`badge badge-${template.isActive ? "success" : "secondary"}`}>
+                  {template.isActive ? "Active" : "Inactive"}
                 </span>
               </div>
               <div className="album-template-summary-item">
                 <span className="job-summary-label">Category</span>
-                <span className="job-summary-value">{templateForm.category || "—"}</span>
+                <span className="job-summary-value">{template.category || "—"}</span>
               </div>
               <div className="album-template-summary-item">
                 <span className="job-summary-label">Default Model</span>
-                <span className="job-summary-value">{templateForm.defaultModel || "—"}</span>
+                <span className="job-summary-value">{template.defaultModel || "—"}</span>
               </div>
               <div className="album-template-summary-item">
                 <span className="job-summary-label">Slug</span>
-                <span className="job-summary-value">{templateForm.slug || "—"}</span>
+                <span className="job-summary-value">{template.slug || "—"}</span>
               </div>
               <div className="album-template-summary-item">
                 <span className="job-summary-label">Generations</span>
@@ -638,7 +747,7 @@ export default function AlbumTemplates() {
               </div>
               <div className="album-template-summary-item">
                 <span className="job-summary-label">Valid Outputs</span>
-                <span className="job-summary-value">{templateOutputCount}</span>
+                <span className="job-summary-value">{countValidOutputs(generations)}</span>
               </div>
             </div>
           </section>
@@ -649,14 +758,6 @@ export default function AlbumTemplates() {
                 <h2 className="section-title">Generations</h2>
                 <p className="prompt-card-subtitle">Stored runs for this template.</p>
               </div>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={handleRefreshGenerations}
-                disabled={!selectedTemplate || generationsLoading}
-              >
-                Refresh
-              </button>
             </div>
 
             {generationsLoading ? (
@@ -667,7 +768,7 @@ export default function AlbumTemplates() {
             ) : generations.length === 0 ? (
               <div className="empty-state compact-empty">
                 <h3>No generations yet</h3>
-                <p>Create a themed run to start collecting JSON outputs.</p>
+                <p>Request a run to start collecting JSON outputs.</p>
               </div>
             ) : (
               <div className="prompt-generation-list">
@@ -690,6 +791,208 @@ export default function AlbumTemplates() {
                 ))}
               </div>
             )}
+          </section>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+export function AlbumTemplateManualUpload() {
+  const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const [template, setTemplate] = useState<PromptTemplate | null>(null);
+  const [theme, setTheme] = useState(searchParams.get("theme") ?? "");
+  const [manualResponseText, setManualResponseText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [copyingPrompt, setCopyingPrompt] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const resolvedPromptPreview = buildResolvedPromptPreview(template?.templateBody ?? "", theme);
+
+  useEffect(() => {
+    if (!id) return;
+    void loadTemplate();
+  }, [id]);
+
+  async function loadTemplate(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setLoading(true);
+      const templateData = await loadPromptTemplate(id);
+      setTemplate(templateData);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load manual upload page");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCopyPrompt(): Promise<void> {
+    try {
+      setCopyingPrompt(true);
+      await navigator.clipboard.writeText(resolvedPromptPreview);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to copy prompt");
+    } finally {
+      window.setTimeout(() => setCopyingPrompt(false), 1200);
+    }
+  }
+
+  async function handleSaveManualGeneration(): Promise<void> {
+    if (!template || !theme.trim()) {
+      setError("Theme is required.");
+      return;
+    }
+
+    if (!manualResponseText.trim()) {
+      setError("LLM response is required.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError(null);
+
+      const created = await createPromptGeneration(template, theme);
+      await savePromptGenerationOutput(created.id, manualResponseText);
+      navigate(`/album-templates/${template.id}/generations`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save manual generation");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="page-content">
+        <div className="loading-state">
+          <div className="spinner"></div>
+          <p>Loading manual upload page...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!template) {
+    return (
+      <div className="page-content">
+        <div className="empty-state">
+          <h2>Template not found</h2>
+          <p>The selected template could not be loaded.</p>
+          <Link to="/album-templates" className="btn btn-secondary">
+            Back to Templates
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-content">
+      <div className="page-header-section album-template-detail-header">
+        <div>
+          <Link to={`/album-templates/${template.id}/generations`} className="breadcrumb">
+            ← Back to Generations
+          </Link>
+          <h1 className="page-title">{template.name}</h1>
+          <p className="page-subtitle">Copy the predefined prompt, run the LLM manually, then upload the response here.</p>
+        </div>
+        <div className="header-actions">
+          <Link to={`/album-templates/${template.id}/edit`} className="btn btn-secondary">
+            Edit Template
+          </Link>
+          <button type="button" className="btn btn-primary" onClick={handleSaveManualGeneration} disabled={saving}>
+            {saving ? "Saving..." : "Save Manual Generation"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="alert alert-error">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      <div className="album-template-detail-layout">
+        <section className="album-template-main">
+          <section className="prompt-card-shell">
+            <div className="prompt-card-header">
+              <div>
+                <h2 className="section-title">Manual Response Upload</h2>
+                <p className="prompt-card-subtitle">Use this page while MCP is unavailable. The prompt is prebuilt from the template and theme.</p>
+              </div>
+            </div>
+
+            <div className="album-template-generate-grid">
+              <div className="prompt-generation-form">
+                <label className="prompt-field">
+                  <span>Theme</span>
+                  <input placeholder="Ultimate Gym Workout Music" value={theme} onChange={(e) => setTheme(e.target.value)} />
+                </label>
+
+                <label className="prompt-field">
+                  <span>Input JSON Preview</span>
+                  <pre className="prompt-code-block">{JSON.stringify({ theme: theme || "Ultimate Gym Workout Music" }, null, 2)}</pre>
+                </label>
+
+                <label className="prompt-field">
+                  <span>LLM Response</span>
+                  <textarea
+                    className="prompt-manual-output-input"
+                    rows={16}
+                    value={manualResponseText}
+                    onChange={(e) => setManualResponseText(e.target.value)}
+                    placeholder="Paste the raw LLM JSON response here..."
+                  />
+                </label>
+              </div>
+
+              <label className="prompt-field">
+                <span>Prebuilt Prompt</span>
+                <div className="prompt-block-actions">
+                  <button type="button" className="btn btn-secondary btn-compact" onClick={handleCopyPrompt}>
+                    {copyingPrompt ? "Copied" : "Copy Prompt"}
+                  </button>
+                </div>
+                <pre className="prompt-code-block prompt-code-block-tall">{resolvedPromptPreview}</pre>
+              </label>
+            </div>
+          </section>
+        </section>
+
+        <aside className="album-template-sidebar">
+          <section className="prompt-card-shell album-template-summary-card">
+            <div className="prompt-card-header">
+              <div>
+                <h2 className="section-title">Template Summary</h2>
+                <p className="prompt-card-subtitle">Quick context while you run the prompt manually.</p>
+              </div>
+            </div>
+
+            <div className="album-template-summary-list">
+              <div className="album-template-summary-item">
+                <span className="job-summary-label">Template</span>
+                <span className="job-summary-value">{template.name}</span>
+              </div>
+              <div className="album-template-summary-item">
+                <span className="job-summary-label">Slug</span>
+                <span className="job-summary-value">{template.slug || "—"}</span>
+              </div>
+              <div className="album-template-summary-item">
+                <span className="job-summary-label">Model</span>
+                <span className="job-summary-value">{template.defaultModel || "—"}</span>
+              </div>
+              <div className="album-template-summary-item">
+                <span className="job-summary-label">Category</span>
+                <span className="job-summary-value">{template.category || "—"}</span>
+              </div>
+            </div>
           </section>
         </aside>
       </div>
