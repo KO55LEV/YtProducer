@@ -1,9 +1,11 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using YtProducer.Contracts.Jobs;
 using YtProducer.Contracts.Prompts;
 using YtProducer.Domain.Entities;
 using YtProducer.Domain.Enums;
 using YtProducer.Infrastructure.Persistence;
+using YtProducer.Infrastructure.Services;
 
 namespace YtProducer.Api.Endpoints;
 
@@ -191,6 +193,7 @@ public static class PromptTemplateEndpoints
         Guid id,
         PromptGenerationRequest request,
         YtProducerDbContext dbContext,
+        IJobService jobService,
         CancellationToken cancellationToken)
     {
         var template = await dbContext.PromptTemplates
@@ -216,7 +219,7 @@ public static class PromptTemplateEndpoints
             Id = Guid.NewGuid(),
             TemplateId = template.Id,
             Theme = theme,
-            Status = PromptGenerationStatus.Draft,
+            Status = PromptGenerationStatus.Queued,
             Model = string.IsNullOrWhiteSpace(request.Model) ? template.DefaultModel : request.Model.Trim(),
             InputJson = inputJson,
             ResolvedPrompt = resolvedPrompt,
@@ -224,6 +227,24 @@ public static class PromptTemplateEndpoints
         };
 
         dbContext.PromptGenerations.Add(item);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        var payloadArguments = new CreatePromptGenerationJobArguments(item.Id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "generate-album-json",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.GenerateAlbumJson,
+            TargetType = "prompt_generation",
+            TargetId = item.Id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        item.JobId = job.Id;
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/prompt-generations/{item.Id}", MapGeneration(item));

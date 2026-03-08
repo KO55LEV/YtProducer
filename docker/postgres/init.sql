@@ -70,6 +70,21 @@ CREATE TABLE IF NOT EXISTS tracks (
 CREATE INDEX IF NOT EXISTS ix_tracks_playlist_id ON tracks(playlist_id);
 CREATE INDEX IF NOT EXISTS ix_tracks_status ON tracks(status);
 
+CREATE TABLE IF NOT EXISTS track_social_stats (
+    id uuid PRIMARY KEY,
+    track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    playlist_id uuid NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    likes_count integer NOT NULL DEFAULT 0,
+    dislikes_count integer NOT NULL DEFAULT 0,
+    created_at_utc timestamptz NOT NULL DEFAULT NOW(),
+    updated_at_utc timestamptz NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_track_social_stats_track_id UNIQUE (track_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_track_social_stats_playlist_id ON track_social_stats(playlist_id);
+CREATE INDEX IF NOT EXISTS ix_track_social_stats_likes_count ON track_social_stats(likes_count DESC);
+CREATE INDEX IF NOT EXISTS ix_track_social_stats_dislikes_count ON track_social_stats(dislikes_count DESC);
+
 CREATE TABLE IF NOT EXISTS track_images (
     id uuid PRIMARY KEY,
     track_id uuid NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,

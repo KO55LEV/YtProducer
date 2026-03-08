@@ -9,6 +9,8 @@ export type Track = {
   key?: string | null;
   energyLevel?: number | null;
   status: string;
+  likesCount: number;
+  dislikesCount: number;
 };
 
 export type Playlist = {
@@ -163,6 +165,13 @@ export type TrackLoop = {
   finishedAtUtc?: string | null;
   createdAtUtc: string;
   updatedAtUtc: string;
+};
+
+export type TrackSocialStatResponse = {
+  trackId: string;
+  playlistId: string;
+  likesCount: number;
+  dislikesCount: number;
 };
 
 export type ScheduleTrackLoopResponse = {

@@ -10,4 +10,6 @@ public sealed record TrackResponse(
     int? TempoBpm,
     string? Key,
     int? EnergyLevel,
-    string Status);
+    string Status,
+    int LikesCount,
+    int DislikesCount);

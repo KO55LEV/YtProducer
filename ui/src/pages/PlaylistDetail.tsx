@@ -7,6 +7,7 @@ import type {
   PlaylistTrackMedia,
   ScheduleTrackLoopResponse,
   Track,
+  TrackSocialStatResponse,
   TrackVideoGeneration,
   UpdatePlaylistStatusResponse
 } from "../types";
@@ -38,6 +39,25 @@ function isMasterImageForPosition(fileName: string, position: number): boolean {
   return new RegExp(`^${escapedPosition}\\.[^.]+$`, "i").test(fileName);
 }
 
+function TrackReactionIcon({ type }: { type: "like" | "dislike" }) {
+  const rotation = type === "dislike" ? "rotate(180 12 12)" : undefined;
+
+  return (
+    <svg
+      className="track-social-icon"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M9 22H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h4v11Zm2-11 3.1-7.2A1.9 1.9 0 0 1 15.84 2c1.2 0 2.16.97 2.16 2.17V8h2.9c1.56 0 2.64 1.55 2.1 3l-2.23 6.26A3 3 0 0 1 17.95 19H11V11Z"
+        transform={rotation}
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 export default function PlaylistDetail() {
   const { id } = useParams<{ id: string }>();
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
@@ -58,6 +78,7 @@ export default function PlaylistDetail() {
   const [loopCountByTrackId, setLoopCountByTrackId] = useState<Record<string, number>>({});
   const [createLoopBusyByTrackId, setCreateLoopBusyByTrackId] = useState<Record<string, boolean>>({});
   const [createLoopJobIdByTrackId, setCreateLoopJobIdByTrackId] = useState<Record<string, string>>({});
+  const [reactionBusyByTrackId, setReactionBusyByTrackId] = useState<Record<string, boolean>>({});
   const [generateImagesBusy, setGenerateImagesBusy] = useState(false);
   const [generateImagesJobId, setGenerateImagesJobId] = useState<string | null>(null);
   const [generateMusicBusy, setGenerateMusicBusy] = useState(false);
@@ -366,6 +387,49 @@ export default function PlaylistDetail() {
       return false;
     } finally {
       setCreateLoopBusyByTrackId((prev) => ({ ...prev, [track.id]: false }));
+    }
+  }
+
+  async function handleTrackReaction(track: Track, reaction: "like" | "dislike"): Promise<boolean> {
+    if (!id) return false;
+
+    try {
+      setReactionBusyByTrackId((prev) => ({ ...prev, [track.id]: true }));
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/tracks/${track.id}/reaction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reaction })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Track reaction failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as TrackSocialStatResponse;
+      setPlaylist((prev) => {
+        if (!prev) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          tracks: prev.tracks.map((item) =>
+            item.id === data.trackId
+              ? {
+                  ...item,
+                  likesCount: data.likesCount,
+                  dislikesCount: data.dislikesCount
+                }
+              : item
+          )
+        };
+      });
+
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setReactionBusyByTrackId((prev) => ({ ...prev, [track.id]: false }));
     }
   }
 
@@ -988,7 +1052,31 @@ export default function PlaylistDetail() {
                 })()}
               </div>
               <div className="track-content">
-                <div className="track-position">#{track.playlistPosition}</div>
+                <div className="track-header">
+                  <div className="track-position">#{track.playlistPosition}</div>
+                  <div className="track-social-controls track-social-controls-header">
+                    <button
+                      type="button"
+                      className="track-social-btn track-social-like"
+                      onClick={() => handleTrackReaction(track, "like")}
+                      disabled={reactionBusyByTrackId[track.id] === true}
+                      aria-label={`Like track ${track.title}`}
+                    >
+                      <TrackReactionIcon type="like" />
+                      <span className="track-social-count">{track.likesCount}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="track-social-btn track-social-dislike"
+                      onClick={() => handleTrackReaction(track, "dislike")}
+                      disabled={reactionBusyByTrackId[track.id] === true}
+                      aria-label={`Dislike track ${track.title}`}
+                    >
+                      <TrackReactionIcon type="dislike" />
+                      <span className="track-social-count">{track.dislikesCount}</span>
+                    </button>
+                  </div>
+                </div>
                 <h3 className="track-title">{track.title}</h3>
                 {track.youTubeTitle && (
                   <p className="track-youtube-title">📺 {track.youTubeTitle}</p>
@@ -1100,42 +1188,46 @@ export default function PlaylistDetail() {
                       const scheduledJobId = createLoopJobIdByTrackId[track.id];
 
                       return (
-                        <div className="track-loop-controls">
-                          <label className="track-loop-input-wrap">
-                            <span className="track-loop-label">Loops</span>
-                            <input
-                              type="number"
-                              min={2}
-                              step={1}
-                              value={loopCount}
-                              onChange={(event) =>
-                                setLoopCountByTrackId((prev) => ({
-                                  ...prev,
-                                  [track.id]: Math.max(2, Number.parseInt(event.target.value || "2", 10) || 2)
-                                }))
-                              }
-                              className="track-loop-input"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="track-loop-btn"
-                            onClick={() => handleCreateLoop(track)}
-                            disabled={loopBusy}
-                          >
-                            {loopBusy ? "Creating..." : "Create Loop"}
-                          </button>
-                          {scheduledJobId && (
-                            <span className="track-loop-scheduled">Scheduled</span>
-                          )}
+                        <div className="track-status-primary">
+                          <div className="track-loop-controls">
+                            <label className="track-loop-input-wrap">
+                              <span className="track-loop-label">Loops</span>
+                              <input
+                                type="number"
+                                min={2}
+                                step={1}
+                                value={loopCount}
+                                onChange={(event) =>
+                                  setLoopCountByTrackId((prev) => ({
+                                    ...prev,
+                                    [track.id]: Math.max(2, Number.parseInt(event.target.value || "2", 10) || 2)
+                                  }))
+                                }
+                                className="track-loop-input"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="track-loop-btn"
+                              onClick={() => handleCreateLoop(track)}
+                              disabled={loopBusy}
+                            >
+                              {loopBusy ? "Creating..." : "Create Loop"}
+                            </button>
+                            {scheduledJobId && (
+                              <span className="track-loop-scheduled">Scheduled</span>
+                            )}
+                          </div>
                         </div>
                       );
                     }
 
                     return (
-                      <span className={`badge badge-${track.status.toLowerCase()}`}>
-                        {track.status}
-                      </span>
+                      <div className="track-status-primary">
+                        <span className={`badge badge-${track.status.toLowerCase()}`}>
+                          {track.status}
+                        </span>
+                      </div>
                     );
                   })()}
                   {mediaLoading && (

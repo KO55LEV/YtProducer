@@ -43,4 +43,6 @@ public sealed class Track
     public ICollection<TrackVideoGeneration> VideoGenerations { get; set; } = new List<TrackVideoGeneration>();
 
     public ICollection<TrackLoop> Loops { get; set; } = new List<TrackLoop>();
+
+    public TrackSocialStat? SocialStat { get; set; }
 }

@@ -17,6 +17,7 @@ public sealed class PlaylistRepository : IPlaylistRepository
     {
         var playlists = await _context.Playlists
             .Include(x => x.Tracks)
+                .ThenInclude(x => x.SocialStat)
             .OrderByDescending(x => x.CreatedAtUtc)
             .ToListAsync(cancellationToken);
 
@@ -34,6 +35,7 @@ public sealed class PlaylistRepository : IPlaylistRepository
     {
         var playlist = await _context.Playlists
             .Include(x => x.Tracks)
+                .ThenInclude(x => x.SocialStat)
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
 
         if (playlist is null)

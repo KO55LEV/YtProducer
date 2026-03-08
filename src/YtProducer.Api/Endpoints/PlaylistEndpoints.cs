@@ -145,6 +145,12 @@ public static class PlaylistEndpoints
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
+        group.MapPost("/{id:guid}/tracks/{trackId:guid}/reaction", AddTrackReactionAsync)
+            .WithName("AddTrackReaction")
+            .Produces<TrackSocialStatResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
         return app;
     }
 
@@ -265,9 +271,92 @@ public static class PlaylistEndpoints
                 t.TempoBpm,
                 t.Key,
                 t.EnergyLevel,
-                t.Status.ToString()
+                t.Status.ToString(),
+                t.SocialStat?.LikesCount ?? 0,
+                t.SocialStat?.DislikesCount ?? 0
             )).ToList()
         );
+    }
+
+    private static async Task<IResult> AddTrackReactionAsync(
+        Guid id,
+        Guid trackId,
+        TrackSocialReactionRequest request,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Reaction))
+        {
+            return Results.BadRequest(new { message = "Reaction is required." });
+        }
+
+        var normalizedReaction = request.Reaction.Trim().ToLowerInvariant();
+        if (normalizedReaction is not ("like" or "dislike"))
+        {
+            return Results.BadRequest(new { message = "Reaction must be 'like' or 'dislike'." });
+        }
+
+        var track = await dbContext.Tracks
+            .Include(x => x.SocialStat)
+            .FirstOrDefaultAsync(
+                x => x.Id == trackId && x.PlaylistId == id,
+                cancellationToken);
+
+        if (track == null)
+        {
+            return Results.NotFound(new { message = $"Track {trackId} was not found in playlist {id}." });
+        }
+
+        var socialStat = track.SocialStat;
+        if (socialStat == null)
+        {
+            socialStat = new TrackSocialStat
+            {
+                Id = Guid.NewGuid(),
+                TrackId = track.Id,
+                PlaylistId = track.PlaylistId,
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                UpdatedAtUtc = DateTimeOffset.UtcNow
+            };
+
+            dbContext.TrackSocialStats.Add(socialStat);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (normalizedReaction == "like")
+        {
+            await dbContext.TrackSocialStats
+                .Where(x => x.TrackId == track.Id)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(x => x.LikesCount, x => x.LikesCount + 1)
+                        .SetProperty(x => x.UpdatedAtUtc, now),
+                    cancellationToken);
+        }
+        else
+        {
+            await dbContext.TrackSocialStats
+                .Where(x => x.TrackId == track.Id)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(x => x.DislikesCount, x => x.DislikesCount + 1)
+                        .SetProperty(x => x.UpdatedAtUtc, now),
+                    cancellationToken);
+        }
+
+        track.UpdatedAtUtc = now;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        socialStat = await dbContext.TrackSocialStats
+            .AsNoTracking()
+            .FirstAsync(x => x.TrackId == track.Id, cancellationToken);
+
+        return Results.Ok(new TrackSocialStatResponse(
+            track.Id,
+            track.PlaylistId,
+            socialStat.LikesCount,
+            socialStat.DislikesCount));
     }
 
     private static async Task<IResult> GetPlaylistMediaAsync(

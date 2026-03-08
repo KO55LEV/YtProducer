@@ -61,12 +61,10 @@ export default function AlbumTemplates() {
   const [selectedGenerationId, setSelectedGenerationId] = useState<string | null>(null);
   const [templateForm, setTemplateForm] = useState(emptyTemplateForm);
   const [theme, setTheme] = useState("");
-  const [outputDraft, setOutputDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [generationsLoading, setGenerationsLoading] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [creatingGeneration, setCreatingGeneration] = useState(false);
-  const [savingOutput, setSavingOutput] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedTemplate = useMemo(() => {
@@ -98,7 +96,6 @@ export default function AlbumTemplates() {
       setGenerations([]);
       setSelectedGenerationId(null);
       setTheme("");
-      setOutputDraft("");
       return;
     }
 
@@ -119,7 +116,6 @@ export default function AlbumTemplates() {
     });
 
     setTheme("");
-    setOutputDraft("");
     void loadGenerations(selectedTemplate.id);
   }, [selectedTemplate, isNewTemplate, isListView]);
 
@@ -221,7 +217,6 @@ export default function AlbumTemplates() {
       const created = (await response.json()) as PromptGeneration;
       await loadGenerations(selectedTemplate.id);
       setSelectedGenerationId(created.id);
-      setOutputDraft("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create generation");
     } finally {
@@ -229,35 +224,9 @@ export default function AlbumTemplates() {
     }
   }
 
-  async function handleSaveOutput(): Promise<void> {
-    if (!selectedGeneration || !outputDraft.trim()) return;
-
-    try {
-      setSavingOutput(true);
-      setError(null);
-
-      const response = await fetch(`${apiBaseUrl}/prompt-generations/${selectedGeneration.id}/outputs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rawText: outputDraft.trim(),
-          outputType: "album_json"
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Save output failed with status ${response.status}`);
-      }
-
-      const updated = (await response.json()) as PromptGeneration;
-      setGenerations((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-      setSelectedGenerationId(updated.id);
-      setOutputDraft("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save output");
-    } finally {
-      setSavingOutput(false);
-    }
+  async function handleRefreshGenerations(): Promise<void> {
+    if (!selectedTemplate) return;
+    await loadGenerations(selectedTemplate.id);
   }
 
   if (isListView) {
@@ -463,15 +432,15 @@ export default function AlbumTemplates() {
               <div className="prompt-card-header">
                 <div>
                   <h2 className="section-title">Generation Output</h2>
-                  <p className="prompt-card-subtitle">Paste returned JSON, validate it, and keep the saved formatted result.</p>
+                  <p className="prompt-card-subtitle">Job-processed result stored in the database for this generation.</p>
                 </div>
                 <button
                   type="button"
-                  className="btn btn-primary"
-                  onClick={handleSaveOutput}
-                  disabled={!outputDraft.trim() || savingOutput}
+                  className="btn btn-secondary"
+                  onClick={handleRefreshGenerations}
+                  disabled={!selectedTemplate || generationsLoading}
                 >
-                  {savingOutput ? "Saving..." : "Save Output"}
+                  Refresh
                 </button>
               </div>
 
@@ -494,18 +463,27 @@ export default function AlbumTemplates() {
                       <span className="job-summary-label">Created</span>
                       <span className="job-summary-value">{formatDate(selectedGeneration.createdAtUtc)}</span>
                     </div>
+                    <div>
+                      <span className="job-summary-label">Job Id</span>
+                      <span className="job-summary-value">{selectedGeneration.jobId ?? "—"}</span>
+                    </div>
+                    <div>
+                      <span className="job-summary-label">Started</span>
+                      <span className="job-summary-value">{formatDate(selectedGeneration.startedAtUtc)}</span>
+                    </div>
+                    <div>
+                      <span className="job-summary-label">Finished</span>
+                      <span className="job-summary-value">{formatDate(selectedGeneration.finishedAtUtc)}</span>
+                    </div>
                   </div>
                 </div>
 
                 <div className="template-output-grid">
                   <label className="prompt-field">
-                    <span>Returned JSON / Raw Response</span>
-                    <textarea
-                      rows={14}
-                      value={outputDraft}
-                      onChange={(e) => setOutputDraft(e.target.value)}
-                      placeholder="Paste model JSON response here..."
-                    />
+                    <span>Raw Response</span>
+                    <pre className="prompt-code-block prompt-code-block-output">
+                      {latestOutput?.rawText ?? "No stored response yet. Leave the worker running, then refresh."}
+                    </pre>
                   </label>
 
                   <label className="prompt-field">
@@ -519,6 +497,12 @@ export default function AlbumTemplates() {
                 {latestOutput && !latestOutput.isValidJson && latestOutput.validationErrors && (
                   <div className="alert alert-error compact-alert">
                     <strong>Validation:</strong> {latestOutput.validationErrors}
+                  </div>
+                )}
+
+                {selectedGeneration.errorMessage && (
+                  <div className="alert alert-error compact-alert">
+                    <strong>Generation Error:</strong> {selectedGeneration.errorMessage}
                   </div>
                 )}
 
@@ -576,6 +560,14 @@ export default function AlbumTemplates() {
                 <h2 className="section-title">Generations</h2>
                 <p className="prompt-card-subtitle">Stored runs for this template.</p>
               </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleRefreshGenerations}
+                disabled={!selectedTemplate || generationsLoading}
+              >
+                Refresh
+              </button>
             </div>
 
             {generationsLoading ? (

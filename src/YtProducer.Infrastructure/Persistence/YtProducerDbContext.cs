@@ -24,6 +24,8 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<TrackImage> TrackImages => Set<TrackImage>();
 
+    public DbSet<TrackSocialStat> TrackSocialStats => Set<TrackSocialStat>();
+
     public DbSet<TrackOnYoutube> TrackOnYoutube => Set<TrackOnYoutube>();
 
     public DbSet<TrackVideoGeneration> TrackVideoGenerations => Set<TrackVideoGeneration>();

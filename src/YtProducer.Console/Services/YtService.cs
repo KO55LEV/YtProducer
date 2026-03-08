@@ -298,6 +298,7 @@ public class YtService
         return command.ToLowerInvariant() switch
         {
             "playlist-init" => await ProcessPlaylistInitJobAsync(job, payload),
+            "generate-album-json" => await ProcessGenerateAlbumJsonJobAsync(job, payload),
             "generate-all-images" => await ProcessGenerateAllImagesJobAsync(job, payload),
             "generate-all-music" => await ProcessGenerateAllMusicJobAsync(job, payload),
             "track-create-youtube-video-thumbnail-v2" => await ProcessGenerateThumbnailsJobAsync(job, payload),
@@ -308,6 +309,116 @@ public class YtService
             "create-track-loop" => await ProcessCreateTrackLoopJobAsync(job, payload),
             _ => throw new InvalidOperationException($"Unsupported scheduled command: {command}")
         };
+    }
+
+    private async Task<string> ProcessGenerateAlbumJsonJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreatePromptGenerationJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("generate-album-json arguments are invalid.");
+        }
+
+        var generation = await _context.PromptGenerations
+            .Include(x => x.Template)
+            .Include(x => x.Outputs)
+            .FirstOrDefaultAsync(x => x.Id == arguments.PromptGenerationId);
+        if (generation == null)
+        {
+            throw new InvalidOperationException($"Prompt generation not found: {arguments.PromptGenerationId}");
+        }
+
+        if (generation.Template == null)
+        {
+            throw new InvalidOperationException($"Prompt template not found for generation: {arguments.PromptGenerationId}");
+        }
+
+        generation.Status = PromptGenerationStatus.Running;
+        generation.StartedAtUtc = DateTimeOffset.UtcNow;
+        generation.FinishedAtUtc = null;
+        generation.ErrorMessage = null;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Album generation started prompt_generation_id={generation.Id} model={generation.Model ?? generation.Template.DefaultModel ?? "gemini-3.1-pro"}");
+
+        var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
+        {
+            throw new InvalidOperationException("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY is not configured.");
+        }
+
+        var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_PROJECT")
+            ?? "OnlineTeamTools.MCP.KieAi/OnlineTeamTools.MCP.KieAi.csproj";
+
+        var model = string.IsNullOrWhiteSpace(generation.Model)
+            ? (generation.Template.DefaultModel ?? "gemini-3.1-pro")
+            : generation.Model.Trim();
+
+        var execution = await ExecutePromptGenerationAsync(
+            mcpWorkingDirectory,
+            mcpProject,
+            model,
+            generation.Template.TemplateBody,
+            generation.InputJson);
+
+        if (!execution.Success)
+        {
+            generation.Status = PromptGenerationStatus.Failed;
+            generation.FinishedAtUtc = DateTimeOffset.UtcNow;
+            generation.ErrorMessage = execution.ErrorMessage;
+            await _context.SaveChangesAsync();
+
+            await AppendJobLogAsync(job.Id, "Error", $"Album generation failed prompt_generation_id={generation.Id}", execution.ErrorMessage);
+            throw new InvalidOperationException(execution.ErrorMessage ?? "Prompt generation failed.");
+        }
+
+        var normalizedRawText = NormalizeReturnedJson(execution.RawText);
+        var isValidJson = TryFormatJson(normalizedRawText, out var formattedJson, out var validationErrors);
+
+        var output = new PromptGenerationOutput
+        {
+            Id = Guid.NewGuid(),
+            PromptGenerationId = generation.Id,
+            OutputType = "album_json",
+            RawText = execution.RawText,
+            FormattedJson = formattedJson,
+            IsValidJson = isValidJson,
+            ValidationErrors = validationErrors,
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        };
+
+        generation.Outputs.Add(output);
+        generation.Status = isValidJson ? PromptGenerationStatus.Completed : PromptGenerationStatus.Failed;
+        generation.FinishedAtUtc = DateTimeOffset.UtcNow;
+        generation.ErrorMessage = isValidJson ? null : validationErrors;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(
+            job.Id,
+            isValidJson ? "Info" : "Warning",
+            $"Album generation completed prompt_generation_id={generation.Id} valid_json={isValidJson.ToString().ToLowerInvariant()}",
+            JsonSerializer.Serialize(new
+            {
+                generationId = generation.Id,
+                outputId = output.Id,
+                model,
+                validationErrors
+            }));
+
+        if (!isValidJson)
+        {
+            throw new InvalidOperationException(validationErrors ?? "Album generation returned invalid JSON.");
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            promptGenerationId = generation.Id,
+            outputId = output.Id,
+            model,
+            validationErrors = (string?)null
+        });
     }
 
     private async Task<string> ProcessPlaylistInitJobAsync(Job job, ScheduledCommandPayload payload)
@@ -760,6 +871,20 @@ public class YtService
 
     private async Task MarkJobTargetFailedAsync(Job job, string errorMessage)
     {
+        if (string.Equals(job.TargetType, "prompt_generation", StringComparison.OrdinalIgnoreCase) && job.TargetId is Guid promptGenerationId)
+        {
+            var promptGeneration = await _context.PromptGenerations.FirstOrDefaultAsync(x => x.Id == promptGenerationId);
+            if (promptGeneration != null)
+            {
+                promptGeneration.Status = PromptGenerationStatus.Failed;
+                promptGeneration.FinishedAtUtc = DateTimeOffset.UtcNow;
+                promptGeneration.ErrorMessage = errorMessage;
+                await _context.SaveChangesAsync();
+            }
+
+            return;
+        }
+
         if (!string.Equals(job.TargetType, "track_loop", StringComparison.OrdinalIgnoreCase) || job.TargetId is not Guid loopId)
         {
             return;
@@ -5457,6 +5582,59 @@ public class YtService
         return JsonSerializer.Serialize(payload);
     }
 
+    private static string BuildChatCompletionRequestJson(
+        string model,
+        string systemPrompt,
+        string userInputJson)
+    {
+        var payload = new
+        {
+            jsonrpc = "2.0",
+            id = 18,
+            method = "tools/call",
+            @params = new
+            {
+                name = "chat_completion",
+                arguments = new
+                {
+                    model,
+                    stream = false,
+                    include_thoughts = false,
+                    reasoning_effort = "high",
+                    messages = new object[]
+                    {
+                        new
+                        {
+                            role = "system",
+                            content = new object[]
+                            {
+                                new
+                                {
+                                    type = "text",
+                                    text = systemPrompt
+                                }
+                            }
+                        },
+                        new
+                        {
+                            role = "user",
+                            content = new object[]
+                            {
+                                new
+                                {
+                                    type = "text",
+                                    text = userInputJson
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
     private async Task<MusicGenerationExecutionResult> ExecuteMusicGenerationAsync(
         string mcpWorkingDirectory,
         string mcpProject,
@@ -5573,6 +5751,87 @@ public class YtService
         catch (Exception ex)
         {
             return MusicGenerationExecutionResult.Fail(ex.Message);
+        }
+    }
+
+    private async Task<ChatCompletionExecutionResult> ExecutePromptGenerationAsync(
+        string mcpWorkingDirectory,
+        string mcpProject,
+        string model,
+        string systemPrompt,
+        string userInputJson)
+    {
+        try
+        {
+            var requestJson = BuildChatCompletionRequestJson(model, systemPrompt, userInputJson);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"run --project \"{mcpProject}\"",
+                WorkingDirectory = mcpWorkingDirectory,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            await process.StandardInput.WriteLineAsync(requestJson);
+            process.StandardInput.Close();
+            var stdOut = await process.StandardOutput.ReadToEndAsync();
+            var stdErr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                var error = string.IsNullOrWhiteSpace(stdErr) ? $"MCP process exit code {process.ExitCode}" : stdErr.Trim();
+                return ChatCompletionExecutionResult.Fail(error);
+            }
+
+            var jsonLine = TryExtractJsonRpcLine(stdOut);
+            if (string.IsNullOrWhiteSpace(jsonLine))
+            {
+                return ChatCompletionExecutionResult.Fail("MCP response did not contain JSON-RPC payload.");
+            }
+
+            using var responseDoc = JsonDocument.Parse(jsonLine);
+            var root = responseDoc.RootElement;
+            if (root.TryGetProperty("error", out var errorNode))
+            {
+                return ChatCompletionExecutionResult.Fail(errorNode.GetRawText());
+            }
+
+            JsonElement resultNode = default;
+            if (root.TryGetProperty("result", out var directResult))
+            {
+                resultNode = directResult;
+                if (directResult.ValueKind == JsonValueKind.Object &&
+                    directResult.TryGetProperty("data", out var dataResult) &&
+                    dataResult.ValueKind == JsonValueKind.Object)
+                {
+                    resultNode = dataResult;
+                }
+            }
+
+            if (resultNode.ValueKind != JsonValueKind.Object)
+            {
+                return ChatCompletionExecutionResult.Fail("Kie chat_completion result payload is missing.");
+            }
+
+            var text = TryGetStringProperty(resultNode, "text");
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return ChatCompletionExecutionResult.Fail("Kie chat_completion did not return text.");
+            }
+
+            return ChatCompletionExecutionResult.Ok(text);
+        }
+        catch (Exception ex)
+        {
+            return ChatCompletionExecutionResult.Fail(ex.Message);
         }
     }
 
@@ -6614,6 +6873,43 @@ public class YtService
         return null;
     }
 
+    private static string NormalizeReturnedJson(string rawText)
+    {
+        var trimmed = rawText.Trim();
+        if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        var normalized = trimmed.Trim('`').Trim();
+        if (normalized.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[4..].Trim();
+        }
+
+        return normalized;
+    }
+
+    private static bool TryFormatJson(string rawText, out string? formattedJson, out string? validationErrors)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(rawText);
+            formattedJson = JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            validationErrors = null;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            formattedJson = null;
+            validationErrors = ex.Message;
+            return false;
+        }
+    }
+
     private static string? ResolveVideoPathForPosition(string playlistFolderPath, int position)
     {
         var preferred = Path.Combine(playlistFolderPath, $"{position}.mp4");
@@ -7424,6 +7720,12 @@ public class YtService
     {
         public static MusicGenerationExecutionResult Ok(IReadOnlyList<SavedAudioArtifact> savedFiles) => new(true, savedFiles, null);
         public static MusicGenerationExecutionResult Fail(string errorMessage) => new(false, Array.Empty<SavedAudioArtifact>(), errorMessage);
+    }
+
+    private sealed record ChatCompletionExecutionResult(bool Success, string? RawText, string? ErrorMessage)
+    {
+        public static ChatCompletionExecutionResult Ok(string rawText) => new(true, rawText, null);
+        public static ChatCompletionExecutionResult Fail(string errorMessage) => new(false, null, errorMessage);
     }
 
     private sealed record YoutubePlaylistCreateResult(bool Success, string? PlaylistId, string? ErrorMessage)
