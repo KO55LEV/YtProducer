@@ -10,6 +10,7 @@ export default function Header() {
         </Link>
         <nav className="nav">
           <Link to="/" className="nav-link">Playlists</Link>
+          <Link to="/album-templates" className="nav-link">Album Templates</Link>
           <Link to="/create-loop" className="nav-link">Create Loop</Link>
           <Link to="/jobs" className="nav-link">Jobs</Link>
           <Link to="/youtube-playlists" className="nav-link">YouTube Playlists</Link>

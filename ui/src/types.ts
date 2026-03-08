@@ -61,6 +61,49 @@ export type UpdatePlaylistStatusResponse = {
   status: string;
 };
 
+export type PromptTemplate = {
+  id: string;
+  name: string;
+  slug: string;
+  category: string;
+  description?: string | null;
+  templateBody: string;
+  inputMode: string;
+  defaultModel?: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  version: number;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+};
+
+export type PromptGenerationOutput = {
+  id: string;
+  promptGenerationId: string;
+  outputType: string;
+  rawText?: string | null;
+  formattedJson?: string | null;
+  isValidJson: boolean;
+  validationErrors?: string | null;
+  createdAtUtc: string;
+};
+
+export type PromptGeneration = {
+  id: string;
+  templateId: string;
+  theme: string;
+  status: string;
+  model?: string | null;
+  inputJson: string;
+  resolvedPrompt: string;
+  jobId?: string | null;
+  createdAtUtc: string;
+  startedAtUtc?: string | null;
+  finishedAtUtc?: string | null;
+  errorMessage?: string | null;
+  outputs: PromptGenerationOutput[];
+};
+
 export type TrackVideoGeneration = {
   id: string;
   trackId: string;

@@ -32,6 +32,12 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<YoutubeLastPublishedDate> YoutubeLastPublishedDates => Set<YoutubeLastPublishedDate>();
 
+    public DbSet<PromptTemplate> PromptTemplates => Set<PromptTemplate>();
+
+    public DbSet<PromptGeneration> PromptGenerations => Set<PromptGeneration>();
+
+    public DbSet<PromptGenerationOutput> PromptGenerationOutputs => Set<PromptGenerationOutput>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(YtProducerDbContext).Assembly);
