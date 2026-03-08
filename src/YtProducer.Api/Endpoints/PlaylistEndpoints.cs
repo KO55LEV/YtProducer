@@ -88,6 +88,11 @@ public static class PlaylistEndpoints
             .Produces<PlaylistPromptResponse>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
+        group.MapGet("/{id:guid}/image-prompts", GetPlaylistImagePromptsAsync)
+            .WithName("GetPlaylistImagePrompts")
+            .Produces<PlaylistPromptResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
         group.MapPost("/{id:guid}/media/set-background", SetPlaylistTrackBackgroundAsync)
             .WithName("SetPlaylistTrackBackground")
             .Produces<SetPlaylistTrackBackgroundResponse>(StatusCodes.Status200OK)
@@ -519,6 +524,79 @@ public static class PlaylistEndpoints
         return Results.Ok(new PlaylistPromptResponse(id, "music", sourceFileName, items));
     }
 
+    private static async Task<IResult> GetPlaylistImagePromptsAsync(
+        Guid id,
+        IPlaylistRepository repository,
+        IConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var playlist = await repository.GetByIdAsync(id, cancellationToken);
+        if (playlist == null)
+        {
+            return Results.NotFound();
+        }
+
+        var prompts = new Dictionary<int, string>();
+        string? sourceFileName = null;
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            var playlistFolderPath = Path.Combine(workingDirectory, id.ToString());
+            var promptFilePath = Path.Combine(playlistFolderPath, "missing_image_prompts.txt");
+            if (System.IO.File.Exists(promptFilePath))
+            {
+                foreach (var line in await System.IO.File.ReadAllLinesAsync(promptFilePath, cancellationToken))
+                {
+                    var match = Regex.Match(line, @"^(?<position>\d+):\s*(?<prompt>.+)$");
+                    if (!match.Success)
+                    {
+                        continue;
+                    }
+
+                    if (int.TryParse(match.Groups["position"].Value, out var position))
+                    {
+                        var prompt = match.Groups["prompt"].Value.Trim();
+                        if (!string.IsNullOrWhiteSpace(prompt))
+                        {
+                            prompts[position] = prompt;
+                        }
+                    }
+                }
+
+                if (prompts.Count > 0)
+                {
+                    sourceFileName = "missing_image_prompts.txt";
+                }
+            }
+        }
+
+        if (prompts.Count == 0)
+        {
+            foreach (var track in playlist.Tracks)
+            {
+                var prompt = TryGetMetadataString(track.Metadata, "imagePrompt");
+                if (!string.IsNullOrWhiteSpace(prompt))
+                {
+                    prompts[track.PlaylistPosition] = prompt.Trim();
+                }
+            }
+        }
+
+        var items = playlist.Tracks
+            .OrderBy(track => track.PlaylistPosition)
+            .Where(track => prompts.ContainsKey(track.PlaylistPosition))
+            .Select(track => new PlaylistPromptItemResponse(
+                track.PlaylistPosition,
+                string.IsNullOrWhiteSpace(track.Title) ? $"Track {track.PlaylistPosition}" : track.Title.Trim(),
+                prompts[track.PlaylistPosition]))
+            .ToList();
+
+        return Results.Ok(new PlaylistPromptResponse(id, "image", sourceFileName, items));
+    }
+
     private static string? TryGetMetadataString(string? metadata, string propertyName)
     {
         if (string.IsNullOrWhiteSpace(metadata))
@@ -570,7 +648,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.PlaylistInit,
             TargetType = "playlist",
@@ -579,9 +657,9 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistStartResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistStartResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
     }
 
     private static async Task<IResult> SchedulePlaylistGenerateImagesAsync(
@@ -605,7 +683,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.GenerateAllImages,
             TargetType = "playlist",
@@ -614,9 +692,9 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistGenerateImagesResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistGenerateImagesResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
     }
 
     private static async Task<IResult> SchedulePlaylistGenerateMusicAsync(
@@ -640,7 +718,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.GenerateAllMusic,
             TargetType = "playlist",
@@ -649,9 +727,9 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistGenerateMusicResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistGenerateMusicResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
     }
 
     private static async Task<IResult> SchedulePlaylistGenerateThumbnailsAsync(
@@ -675,7 +753,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.GenerateThumbnails,
             TargetType = "playlist",
@@ -684,9 +762,9 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistGenerateThumbnailsResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistGenerateThumbnailsResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
     }
 
     private static async Task<IResult> SchedulePlaylistGenerateVideosAsync(
@@ -717,7 +795,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.GenerateVideos,
             TargetType = "playlist",
@@ -726,9 +804,9 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistGenerateVideosResponse(id, job.Id, job.Type.ToString(), job.Status.ToString(), profile));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistGenerateVideosResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString(), profile));
     }
 
     private static async Task<IResult> SchedulePlaylistGenerateYoutubePlaylistAsync(
@@ -753,7 +831,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.GenerateYoutubePlaylist,
             TargetType = "playlist",
@@ -762,9 +840,9 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistGenerateYoutubePlaylistResponse(id, job.Id, job.Type.ToString(), job.Status.ToString(), privacy));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistGenerateYoutubePlaylistResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString(), privacy));
     }
 
     private static async Task<IResult> SchedulePlaylistUploadYoutubeVideosAsync(
@@ -788,7 +866,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.UploadYoutubeVideos,
             TargetType = "playlist",
@@ -797,9 +875,9 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistUploadYoutubeVideosResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistUploadYoutubeVideosResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
     }
 
     private static async Task<IResult> SchedulePlaylistAddYoutubeVideosToPlaylistAsync(
@@ -823,7 +901,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.AddYoutubeVideosToPlaylist,
             TargetType = "playlist",
@@ -832,9 +910,16 @@ public static class PlaylistEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        return Results.Created(
-            $"/jobs/{job.Id}",
-            new SchedulePlaylistAddYoutubeVideosToPlaylistResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistAddYoutubeVideosToPlaylistResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
+    }
+
+    private static IResult BuildScheduledPlaylistResponse<TResponse>(JobCreateResult result, TResponse response)
+    {
+        return result.CreatedNew
+            ? Results.Created($"/jobs/{result.Job.Id}", response)
+            : Results.Ok(response);
     }
 
     private static IResult GetPlaylistMediaFileAsync(
@@ -1715,7 +1800,7 @@ public static class PlaylistEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.CreateTrackLoop,
             TargetType = "track_loop",
@@ -1726,7 +1811,7 @@ public static class PlaylistEndpoints
 
         return Results.Created(
             $"/playlists/{id}/track-loops/{loop.Id}",
-            new ScheduleTrackLoopResponse(job.Id, job.Type.ToString(), MapToTrackLoopResponse(loop)));
+            new ScheduleTrackLoopResponse(result.Job.Id, result.Job.Type.ToString(), MapToTrackLoopResponse(loop)));
     }
 
     private static TrackVideoGenerationResponse MapToTrackVideoGenerationResponse(TrackVideoGeneration item)

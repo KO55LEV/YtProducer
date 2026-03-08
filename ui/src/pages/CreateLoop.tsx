@@ -57,7 +57,7 @@ export default function CreateLoop() {
           <p className="page-subtitle">Paste a YouTube video id to schedule a loop job for the linked track.</p>
         </div>
         <div className="header-actions">
-          <Link to="/" className="btn btn-secondary">Back to Playlists</Link>
+          <Link to="/playlists" className="btn btn-secondary">Back to Playlists</Link>
         </div>
       </div>
 

@@ -50,6 +50,15 @@ function countValidOutputs(generations: PromptGeneration[]): number {
   }, 0);
 }
 
+async function readApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = (await response.json()) as { message?: string };
+    return data.message?.trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function AlbumTemplates() {
   const navigate = useNavigate();
   const { id } = useParams<{ id?: string }>();
@@ -65,6 +74,9 @@ export default function AlbumTemplates() {
   const [generationsLoading, setGenerationsLoading] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [creatingGeneration, setCreatingGeneration] = useState(false);
+  const [savingManualOutput, setSavingManualOutput] = useState(false);
+  const [manualOutputText, setManualOutputText] = useState("");
+  const [copyingPrompt, setCopyingPrompt] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedTemplate = useMemo(() => {
@@ -81,6 +93,7 @@ export default function AlbumTemplates() {
   );
 
   const latestOutput = selectedGeneration?.outputs[0] ?? null;
+  const resolvedPromptPreview = buildResolvedPromptPreview(templateForm.templateBody, theme);
 
   useEffect(() => {
     void loadTemplates();
@@ -118,6 +131,10 @@ export default function AlbumTemplates() {
     setTheme("");
     void loadGenerations(selectedTemplate.id);
   }, [selectedTemplate, isNewTemplate, isListView]);
+
+  useEffect(() => {
+    setManualOutputText(latestOutput?.rawText ?? "");
+  }, [latestOutput?.id]);
 
   async function loadTemplates(): Promise<void> {
     try {
@@ -227,6 +244,47 @@ export default function AlbumTemplates() {
   async function handleRefreshGenerations(): Promise<void> {
     if (!selectedTemplate) return;
     await loadGenerations(selectedTemplate.id);
+  }
+
+  async function handleCopyPrompt(): Promise<void> {
+    try {
+      setCopyingPrompt(true);
+      await navigator.clipboard.writeText(resolvedPromptPreview);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to copy prompt");
+    } finally {
+      window.setTimeout(() => setCopyingPrompt(false), 1200);
+    }
+  }
+
+  async function handleSaveManualOutput(): Promise<void> {
+    if (!selectedGeneration || !manualOutputText.trim()) {
+      return;
+    }
+
+    try {
+      setSavingManualOutput(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/prompt-generations/${selectedGeneration.id}/outputs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rawText: manualOutputText.trim(),
+          outputType: "album_json"
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, `Save manual output failed with status ${response.status}`));
+      }
+
+      await handleRefreshGenerations();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save manual output");
+    } finally {
+      setSavingManualOutput(false);
+    }
   }
 
   if (isListView) {
@@ -420,9 +478,12 @@ export default function AlbumTemplates() {
 
               <label className="prompt-field">
                 <span>Gemini Request Preview</span>
-                <pre className="prompt-code-block prompt-code-block-tall">
-                  {buildResolvedPromptPreview(templateForm.templateBody, theme)}
-                </pre>
+                <div className="prompt-block-actions">
+                  <button type="button" className="btn btn-secondary btn-compact" onClick={handleCopyPrompt}>
+                    {copyingPrompt ? "Copied" : "Copy Prompt"}
+                  </button>
+                </div>
+                <pre className="prompt-code-block prompt-code-block-tall">{resolvedPromptPreview}</pre>
               </label>
             </div>
           </section>
@@ -505,6 +566,34 @@ export default function AlbumTemplates() {
                     <strong>Generation Error:</strong> {selectedGeneration.errorMessage}
                   </div>
                 )}
+
+                <section className="prompt-manual-upload">
+                  <div className="prompt-card-header prompt-card-header-inline">
+                    <div>
+                      <h3 className="section-title">Manual Result Upload</h3>
+                      <p className="prompt-card-subtitle">Paste Gemini output here if you want to store the result manually.</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleSaveManualOutput}
+                      disabled={!manualOutputText.trim() || savingManualOutput}
+                    >
+                      {savingManualOutput ? "Saving..." : "Save Result"}
+                    </button>
+                  </div>
+
+                  <label className="prompt-field">
+                    <span>Raw JSON / Raw Model Output</span>
+                    <textarea
+                      className="prompt-manual-output-input"
+                      rows={12}
+                      value={manualOutputText}
+                      onChange={(e) => setManualOutputText(e.target.value)}
+                      placeholder="Paste Gemini output here..."
+                    />
+                  </label>
+                </section>
 
                 <label className="prompt-field">
                   <span>Saved Gemini Request</span>

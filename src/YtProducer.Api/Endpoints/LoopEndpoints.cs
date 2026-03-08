@@ -109,7 +109,7 @@ public static class LoopEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.CreateTrackLoop,
             TargetType = "track_loop",
@@ -120,7 +120,7 @@ public static class LoopEndpoints
 
         return Results.Created(
             $"/track-loops/{loop.Id}",
-            new ScheduleTrackLoopResponse(job.Id, job.Type.ToString(), MapToTrackLoopResponse(loop)));
+            new ScheduleTrackLoopResponse(result.Job.Id, result.Job.Type.ToString(), MapToTrackLoopResponse(loop)));
     }
 
     private static TrackLoopResponse MapToTrackLoopResponse(TrackLoop item)

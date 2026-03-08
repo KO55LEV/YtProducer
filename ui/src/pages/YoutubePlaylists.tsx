@@ -156,7 +156,7 @@ export default function YoutubePlaylists() {
           <p className="page-subtitle">Track published playlists and YouTube metadata</p>
         </div>
         <div className="header-actions">
-          <Link to="/" className="btn btn-secondary">Back to Playlists</Link>
+          <Link to="/playlists" className="btn btn-secondary">Back to Playlists</Link>
         </div>
       </div>
 

@@ -235,7 +235,7 @@ public static class PromptTemplateEndpoints
             1,
             JsonSerializer.SerializeToElement(payloadArguments)));
 
-        var job = await jobService.CreateAsync(new Job
+        var result = await jobService.CreateAsync(new Job
         {
             Type = JobType.GenerateAlbumJson,
             TargetType = "prompt_generation",
@@ -244,7 +244,7 @@ public static class PromptTemplateEndpoints
             MaxRetries = 3
         }, cancellationToken);
 
-        item.JobId = job.Id;
+        item.JobId = result.Job.Id;
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/prompt-generations/{item.Id}", MapGeneration(item));
@@ -283,22 +283,12 @@ public static class PromptTemplateEndpoints
         }
 
         var rawText = request.RawText.Trim();
-        var isValidJson = false;
-        string? formattedJson = null;
-        string? validationErrors = null;
+        var normalizedRawText = NormalizeReturnedJson(rawText);
+        var isValidJson = TryValidateAlbumJson(normalizedRawText, out var formattedJson, out var validationErrors);
 
-        try
+        if (!isValidJson)
         {
-            using var document = JsonDocument.Parse(rawText);
-            formattedJson = JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-            isValidJson = true;
-        }
-        catch (JsonException ex)
-        {
-            validationErrors = ex.Message;
+            return Results.BadRequest(new { message = validationErrors ?? "Album JSON schema is invalid." });
         }
 
         var output = new PromptGenerationOutput
@@ -308,15 +298,15 @@ public static class PromptTemplateEndpoints
             OutputType = string.IsNullOrWhiteSpace(request.OutputType) ? "album_json" : request.OutputType.Trim(),
             RawText = rawText,
             FormattedJson = formattedJson,
-            IsValidJson = isValidJson,
-            ValidationErrors = validationErrors,
+            IsValidJson = true,
+            ValidationErrors = null,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
         generation.Outputs.Add(output);
-        generation.Status = isValidJson ? PromptGenerationStatus.Completed : PromptGenerationStatus.Failed;
+        generation.Status = PromptGenerationStatus.Completed;
         generation.FinishedAtUtc = DateTimeOffset.UtcNow;
-        generation.ErrorMessage = validationErrors;
+        generation.ErrorMessage = null;
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -351,6 +341,145 @@ public static class PromptTemplateEndpoints
         }
 
         return null;
+    }
+
+    private static string NormalizeReturnedJson(string rawText)
+    {
+        var trimmed = rawText.Trim();
+        if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        var normalized = trimmed.Trim('`').Trim();
+        if (normalized.StartsWith("json", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[4..].Trim();
+        }
+
+        return normalized;
+    }
+
+    private static bool TryValidateAlbumJson(string rawText, out string? formattedJson, out string? validationErrors)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(rawText);
+            formattedJson = JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+
+            var errors = ValidateAlbumRoot(document.RootElement);
+            validationErrors = errors.Count == 0 ? null : string.Join(" ", errors);
+            return errors.Count == 0;
+        }
+        catch (JsonException ex)
+        {
+            formattedJson = null;
+            validationErrors = ex.Message;
+            return false;
+        }
+    }
+
+    private static List<string> ValidateAlbumRoot(JsonElement root)
+    {
+        var errors = new List<string>();
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("Root must be a JSON object.");
+            return errors;
+        }
+
+        ValidateRequiredString(root, "theme", errors);
+        ValidateRequiredString(root, "playlist_title", errors);
+        ValidateRequiredString(root, "playlist_description", errors);
+        ValidateRequiredString(root, "playlist_strategy", errors);
+        ValidateRequiredString(root, "target_platform", errors);
+
+        if (!root.TryGetProperty("tracks", out var tracksElement) || tracksElement.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add("tracks must be an array.");
+            return errors;
+        }
+
+        var trackItems = tracksElement.EnumerateArray().ToList();
+        if (trackItems.Count == 0)
+        {
+            errors.Add("tracks must contain at least one item.");
+            return errors;
+        }
+
+        for (var index = 0; index < trackItems.Count; index++)
+        {
+            ValidateTrack(trackItems[index], index, errors);
+        }
+
+        return errors;
+    }
+
+    private static void ValidateTrack(JsonElement track, int index, List<string> errors)
+    {
+        var prefix = $"tracks[{index}]";
+        if (track.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add($"{prefix} must be an object.");
+            return;
+        }
+
+        ValidatePositiveInt(track, "playlist_position", prefix, errors);
+        ValidateRequiredString(track, "title", errors, prefix);
+        ValidateRequiredString(track, "youtube_title", errors, prefix);
+        ValidateRequiredString(track, "style_summary", errors, prefix);
+        ValidatePositiveInt(track, "duration_seconds", prefix, errors);
+        ValidatePositiveInt(track, "tempo_bpm", prefix, errors);
+        ValidateRequiredString(track, "key", errors, prefix);
+        ValidatePositiveInt(track, "energy_level", prefix, errors);
+        ValidateRequiredString(track, "music_generation_prompt", errors, prefix);
+        ValidateRequiredString(track, "image_prompt", errors, prefix);
+        ValidateRequiredString(track, "youtube_description", errors, prefix);
+        ValidateStringArray(track, "youtube_tags", prefix, errors);
+    }
+
+    private static void ValidateRequiredString(JsonElement element, string propertyName, List<string> errors, string? prefix = null)
+    {
+        if (!element.TryGetProperty(propertyName, out var value) ||
+            value.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(value.GetString()))
+        {
+            errors.Add($"{FormatPath(prefix, propertyName)} is required.");
+        }
+    }
+
+    private static void ValidatePositiveInt(JsonElement element, string propertyName, string prefix, List<string> errors)
+    {
+        if (!element.TryGetProperty(propertyName, out var value) ||
+            value.ValueKind != JsonValueKind.Number ||
+            !value.TryGetInt32(out var number) ||
+            number <= 0)
+        {
+            errors.Add($"{FormatPath(prefix, propertyName)} must be a positive integer.");
+        }
+    }
+
+    private static void ValidateStringArray(JsonElement element, string propertyName, string prefix, List<string> errors)
+    {
+        if (!element.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add($"{FormatPath(prefix, propertyName)} must be an array of strings.");
+            return;
+        }
+
+        var items = value.EnumerateArray().ToList();
+        if (items.Count == 0 || items.Any(item => item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString())))
+        {
+            errors.Add($"{FormatPath(prefix, propertyName)} must contain at least one non-empty string.");
+        }
+    }
+
+    private static string FormatPath(string? prefix, string propertyName)
+    {
+        return string.IsNullOrWhiteSpace(prefix) ? propertyName : $"{prefix}.{propertyName}";
     }
 
     private static PromptTemplateResponse MapTemplate(PromptTemplate item)

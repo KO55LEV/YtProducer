@@ -1723,7 +1723,6 @@ public class YtService
             return;
         }
 
-        var originalStatus = playlist.Status;
         await SetPlaylistStatusAsync(playlistId, PlaylistStatus.VideoInProgress);
 
         var ffmpegPath = Environment.GetEnvironmentVariable("FFMPEG_PATH") ?? "ffmpeg";
@@ -1919,7 +1918,10 @@ public class YtService
         }
         finally
         {
-            await SetPlaylistStatusAsync(playlistId, originalStatus);
+            var finalStatus = summary.Failed > 0
+                ? PlaylistStatus.Failed
+                : PlaylistStatus.VideosGenerated;
+            await SetPlaylistStatusAsync(playlistId, finalStatus);
         }
 
         global::System.Console.WriteLine(

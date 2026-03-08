@@ -121,8 +121,10 @@ public static class JobEndpoints
             MaxRetries = request.MaxRetries
         };
 
-        var createdJob = await jobService.CreateAsync(job, cancellationToken);
-        return Results.Created($"/jobs/{createdJob.Id}", MapToJobResponse(createdJob));
+        var result = await jobService.CreateAsync(job, cancellationToken);
+        return result.CreatedNew
+            ? Results.Created($"/jobs/{result.Job.Id}", MapToJobResponse(result.Job))
+            : Results.Ok(MapToJobResponse(result.Job));
     }
 
     private static async Task<IResult> PatchProgressAsync(

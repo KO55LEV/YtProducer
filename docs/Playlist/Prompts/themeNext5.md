@@ -1,7 +1,4 @@
-{
-"theme": "Dark Aggressive Gym Music"
-}
-
+ 
 {
 "theme": "Bodybuilding Motivation Music"
 }

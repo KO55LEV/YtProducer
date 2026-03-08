@@ -23,7 +23,8 @@ const playlistStatuses = [
   "ImagesGenerated",
   "MusicGenerated",
   "ThumbnailGenerated",
-  "VideoInProgress"
+  "VideoInProgress",
+  "VideosGenerated"
 ] as const;
 
 function getEnergyColor(energyLevel?: number | null): string {
@@ -97,6 +98,9 @@ export default function PlaylistDetail() {
   const [musicPromptsOpen, setMusicPromptsOpen] = useState(false);
   const [musicPromptsLoading, setMusicPromptsLoading] = useState(false);
   const [musicPrompts, setMusicPrompts] = useState<PlaylistPromptResponse | null>(null);
+  const [imagePromptsOpen, setImagePromptsOpen] = useState(false);
+  const [imagePromptsLoading, setImagePromptsLoading] = useState(false);
+  const [imagePrompts, setImagePrompts] = useState<PlaylistPromptResponse | null>(null);
   const [copiedPromptPosition, setCopiedPromptPosition] = useState<number | null>(null);
   const [selectedPlaylistStatus, setSelectedPlaylistStatus] = useState<string>("Draft");
   const [updatePlaylistStatusBusy, setUpdatePlaylistStatusBusy] = useState(false);
@@ -627,6 +631,28 @@ export default function PlaylistDetail() {
     }
   }
 
+  async function handleOpenImagePrompts(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setImagePromptsLoading(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/image-prompts`);
+      if (!response.ok) {
+        throw new Error(`Image prompts failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as PlaylistPromptResponse;
+      setImagePrompts(data);
+      setImagePromptsOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Image prompts failed");
+    } finally {
+      setImagePromptsLoading(false);
+    }
+  }
+
   async function handleCopyPrompt(position: number, prompt: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(prompt);
@@ -709,14 +735,14 @@ export default function PlaylistDetail() {
         <div className="alert alert-error">
           <strong>Error:</strong> {error || "Playlist not found"}
         </div>
-        <Link to="/" className="btn btn-secondary">← Back to Playlists</Link>
+        <Link to="/playlists" className="btn btn-secondary">← Back to Playlists</Link>
       </div>
     );
   }
 
   return (
     <div className="page-content">
-      <Link to="/" className="breadcrumb">← Back to Playlists</Link>
+      <Link to="/playlists" className="breadcrumb">← Back to Playlists</Link>
 
       <div className="playlist-header">
         <div className="playlist-header-layout">
@@ -777,6 +803,14 @@ export default function PlaylistDetail() {
               disabled={musicPromptsLoading}
             >
               {musicPromptsLoading ? "Loading..." : "Music Prompts"}
+            </button>
+            <button
+              type="button"
+              className="playlist-meta-btn"
+              onClick={() => void handleOpenImagePrompts()}
+              disabled={imagePromptsLoading}
+            >
+              {imagePromptsLoading ? "Loading..." : "Image Prompts"}
             </button>
           </div>
         </div>
@@ -1053,7 +1087,7 @@ export default function PlaylistDetail() {
               </div>
               <div className="track-content">
                 <div className="track-header">
-                  <div className="track-position">#{track.playlistPosition}</div>
+                  <div className="track-position prompt-card-position">#{track.playlistPosition}</div>
                   <div className="track-social-controls track-social-controls-header">
                     <button
                       type="button"
@@ -1172,6 +1206,8 @@ export default function PlaylistDetail() {
                 })()}
                 <div className="track-status">
                   {(() => {
+                    const media = mediaByPosition[track.playlistPosition];
+                    const hasGeneratedMusic = (media?.audios.length ?? 0) > 0;
                     const videoGeneration = videoGenerationsByPosition[track.playlistPosition];
                     const showVideoProgress =
                       playlist.status === "VideoInProgress" &&
@@ -1222,12 +1258,26 @@ export default function PlaylistDetail() {
                       );
                     }
 
+                    if (!mediaLoading && !hasGeneratedMusic) {
+                      return (
+                        <div className="track-status-primary track-status-primary-full">
+                          <span className="badge badge-pending track-status-banner">Music Generation Pending</span>
+                        </div>
+                      );
+                    }
+
+                    if (track.status.toLowerCase() === "failed" || track.status.toLowerCase() === "error") {
+                      return (
+                        <div className="track-status-primary">
+                          <span className={`badge badge-${track.status.toLowerCase()}`}>
+                            {track.status}
+                          </span>
+                        </div>
+                      );
+                    }
+
                     return (
-                      <div className="track-status-primary">
-                        <span className={`badge badge-${track.status.toLowerCase()}`}>
-                          {track.status}
-                        </span>
-                      </div>
+                      <div className="track-status-primary" />
                     );
                   })()}
                   {mediaLoading && (
@@ -1432,6 +1482,56 @@ export default function PlaylistDetail() {
             <div className="prompts-modal-list">
               {(musicPrompts?.prompts ?? []).map((item) => (
                 <article key={item.playlistPosition} className="prompt-card">
+                  <div className="prompt-card-header">
+                    <div className="prompt-card-title">
+                      <span className="prompt-card-position">#{item.playlistPosition}</span>
+                      <span className="prompt-card-track">{item.trackTitle}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="prompt-copy-btn"
+                      onClick={() => void handleCopyPrompt(item.playlistPosition, item.prompt)}
+                    >
+                      {copiedPromptPosition === item.playlistPosition ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <pre className="prompt-card-text">{item.prompt}</pre>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {imagePromptsOpen && (
+        <div
+          className="prompts-modal"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setImagePromptsOpen(false)}
+        >
+          <div className="prompts-modal-content" onClick={(event) => event.stopPropagation()}>
+            <div className="prompts-modal-header">
+              <div>
+                <h3>Image Prompts</h3>
+                <p>
+                  {imagePrompts?.sourceFileName
+                    ? `Source: ${imagePrompts.sourceFileName}`
+                    : "Source: track metadata"}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="prompts-modal-close"
+                onClick={() => setImagePromptsOpen(false)}
+                aria-label="Close image prompts"
+              >
+                ×
+              </button>
+            </div>
+            <div className="prompts-modal-list">
+              {(imagePrompts?.prompts ?? []).map((item) => (
+                <article key={`image-${item.playlistPosition}`} className="prompt-card">
                   <div className="prompt-card-header">
                     <div className="prompt-card-title">
                       <span className="prompt-card-position">#{item.playlistPosition}</span>

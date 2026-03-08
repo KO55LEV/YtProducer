@@ -50,7 +50,7 @@ public class JobService : IJobService
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<Job> CreateAsync(Job job, CancellationToken cancellationToken = default)
+    public async Task<JobCreateResult> CreateAsync(Job job, CancellationToken cancellationToken = default)
     {
         var normalizedPayload = NormalizeJson(job.PayloadJson);
         job.PayloadJson = normalizedPayload;
@@ -61,7 +61,7 @@ public class JobService : IJobService
 
         if (existing is not null)
         {
-            return existing;
+            return new JobCreateResult(existing, false);
         }
 
         job.Id = Guid.NewGuid();
@@ -77,7 +77,7 @@ public class JobService : IJobService
         _logger.LogInformation("Created job {JobId} type {JobType} target {TargetType}:{TargetId}", 
             job.Id, job.Type, job.TargetType, job.TargetId);
 
-        return job;
+        return new JobCreateResult(job, true);
     }
 
     public async Task UpdateAsync(Job job, CancellationToken cancellationToken = default)

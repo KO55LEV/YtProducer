@@ -115,7 +115,7 @@ export default function JobsMonitor() {
           <button type="button" className="btn btn-primary" onClick={handleRefresh}>
             Refresh
           </button>
-          <Link to="/" className="btn btn-secondary">Back to Playlists</Link>
+          <Link to="/playlists" className="btn btn-secondary">Back to Playlists</Link>
         </div>
       </div>
 
