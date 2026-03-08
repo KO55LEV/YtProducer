@@ -6,5 +6,13 @@ public enum JobType
     GenerateImage = 2,
     GenerateVisualizer = 3,
     UploadYoutube = 4,
-    CreateTrackLoop = 5
+    CreateTrackLoop = 5,
+    PlaylistInit = 6,
+    GenerateAllImages = 7,
+    GenerateAllMusic = 8,
+    GenerateThumbnails = 9,
+    GenerateVideos = 10,
+    GenerateYoutubePlaylist = 11,
+    UploadYoutubeVideos = 12,
+    AddYoutubeVideosToPlaylist = 13
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import type { Playlist } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
@@ -28,10 +28,13 @@ function statusClassName(status: string): string {
 }
 
 export default function ListManager() {
+  const navigate = useNavigate();
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [startingByPlaylistId, setStartingByPlaylistId] = useState<Record<string, boolean>>({});
+  const [startJobIdByPlaylistId, setStartJobIdByPlaylistId] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetchPlaylists();
@@ -128,6 +131,28 @@ export default function ListManager() {
     }
   }
 
+  async function handleStart(playlistId: string): Promise<void> {
+    try {
+      setStartingByPlaylistId((current) => ({ ...current, [playlistId]: true }));
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${playlistId}/start`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Start failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setStartJobIdByPlaylistId((current) => ({ ...current, [playlistId]: data.jobId }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Start failed");
+    } finally {
+      setStartingByPlaylistId((current) => ({ ...current, [playlistId]: false }));
+    }
+  }
+
   return (
     <div className="page-content">
       <div className="page-header-section">
@@ -173,10 +198,18 @@ export default function ListManager() {
       ) : (
         <div className="playlist-grid">
           {playlists.map((playlist) => (
-            <Link
+            <article
               key={playlist.id}
-              to={`/playlists/${playlist.id}`}
               className="playlist-card"
+              onClick={() => navigate(`/playlists/${playlist.id}`)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  navigate(`/playlists/${playlist.id}`);
+                }
+              }}
             >
               <div className="playlist-card-header">
                 <h3 className="playlist-title">{playlist.title}</h3>
@@ -188,15 +221,35 @@ export default function ListManager() {
               <p className="playlist-description">
                 {playlist.description ?? "No description"}
               </p>
-              <div className="playlist-footer">
-                <span className="track-count">
-                  <strong>{playlist.trackCount}</strong> tracks
-                </span>
-                <span className="playlist-date">
-                  {new Date(playlist.createdAtUtc).toLocaleDateString()}
-                </span>
-              </div>
-            </Link>
+                <div className="playlist-footer">
+                  <span className="track-count">
+                    <strong>{playlist.trackCount}</strong> tracks
+                  </span>
+                  <div className="playlist-footer-actions">
+                    {playlist.status.toLowerCase() === "draft" && (
+                      <>
+                        {startJobIdByPlaylistId[playlist.id] && (
+                          <span className="playlist-start-scheduled">Scheduled</span>
+                        )}
+                        <button
+                          type="button"
+                          className="playlist-start-btn"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleStart(playlist.id);
+                          }}
+                          disabled={startingByPlaylistId[playlist.id] === true}
+                        >
+                          {startingByPlaylistId[playlist.id] === true ? "Starting..." : "Start"}
+                        </button>
+                      </>
+                    )}
+                    <span className="playlist-date">
+                      {new Date(playlist.createdAtUtc).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+            </article>
           ))}
         </div>
       )}

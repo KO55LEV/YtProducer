@@ -32,9 +32,61 @@ public static class PlaylistEndpoints
             .Produces<PlaylistResponse>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
+        group.MapPut("/{id:guid}/status", UpdatePlaylistStatusAsync)
+            .WithName("UpdatePlaylistStatus")
+            .Produces<UpdatePlaylistStatusResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/start", SchedulePlaylistStartAsync)
+            .WithName("SchedulePlaylistStart")
+            .Produces<SchedulePlaylistStartResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/generate-images", SchedulePlaylistGenerateImagesAsync)
+            .WithName("SchedulePlaylistGenerateImages")
+            .Produces<SchedulePlaylistGenerateImagesResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/generate-music", SchedulePlaylistGenerateMusicAsync)
+            .WithName("SchedulePlaylistGenerateMusic")
+            .Produces<SchedulePlaylistGenerateMusicResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/generate-thumbnails", SchedulePlaylistGenerateThumbnailsAsync)
+            .WithName("SchedulePlaylistGenerateThumbnails")
+            .Produces<SchedulePlaylistGenerateThumbnailsResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/generate-videos", SchedulePlaylistGenerateVideosAsync)
+            .WithName("SchedulePlaylistGenerateVideos")
+            .Produces<SchedulePlaylistGenerateVideosResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/generate-youtube-playlist", SchedulePlaylistGenerateYoutubePlaylistAsync)
+            .WithName("SchedulePlaylistGenerateYoutubePlaylist")
+            .Produces<SchedulePlaylistGenerateYoutubePlaylistResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/upload-youtube-videos", SchedulePlaylistUploadYoutubeVideosAsync)
+            .WithName("SchedulePlaylistUploadYoutubeVideos")
+            .Produces<SchedulePlaylistUploadYoutubeVideosResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPost("/{id:guid}/add-youtube-videos-to-playlist", SchedulePlaylistAddYoutubeVideosToPlaylistAsync)
+            .WithName("SchedulePlaylistAddYoutubeVideosToPlaylist")
+            .Produces<SchedulePlaylistAddYoutubeVideosToPlaylistResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
         group.MapGet("/{id:guid}/media", GetPlaylistMediaAsync)
             .WithName("GetPlaylistMedia")
             .Produces<PlaylistMediaResponse>(StatusCodes.Status200OK);
+
+        group.MapGet("/{id:guid}/music-prompts", GetPlaylistMusicPromptsAsync)
+            .WithName("GetPlaylistMusicPrompts")
+            .Produces<PlaylistPromptResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
 
         group.MapPost("/{id:guid}/media/set-background", SetPlaylistTrackBackgroundAsync)
             .WithName("SetPlaylistTrackBackground")
@@ -156,6 +208,40 @@ public static class PlaylistEndpoints
         return Results.Ok(response);
     }
 
+    private static async Task<IResult> UpdatePlaylistStatusAsync(
+        Guid id,
+        UpdatePlaylistStatusRequest request,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var playlist = await dbContext.Playlists
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+        if (playlist == null)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Status) ||
+            !Enum.TryParse<PlaylistStatus>(request.Status.Trim(), ignoreCase: true, out var newStatus))
+        {
+            return Results.BadRequest(new
+            {
+                message = $"Invalid status. Allowed: {string.Join(", ", Enum.GetNames<PlaylistStatus>())}"
+            });
+        }
+
+        var previousStatus = playlist.Status;
+        playlist.Status = newStatus;
+        playlist.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Results.Ok(new UpdatePlaylistStatusResponse(
+            playlist.Id,
+            previousStatus.ToString(),
+            playlist.Status.ToString()));
+    }
+
     private static PlaylistResponse MapToPlaylistResponse(Playlist playlist)
     {
         return new PlaylistResponse(
@@ -269,6 +355,397 @@ public static class PlaylistEndpoints
             .ToList();
 
         return Results.Ok(new PlaylistMediaResponse(id, responseTracks));
+    }
+
+    private static async Task<IResult> GetPlaylistMusicPromptsAsync(
+        Guid id,
+        IPlaylistRepository repository,
+        IConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var playlist = await repository.GetByIdAsync(id, cancellationToken);
+        if (playlist == null)
+        {
+            return Results.NotFound();
+        }
+
+        var prompts = new Dictionary<int, string>();
+        string? sourceFileName = null;
+
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY")
+            ?? configuration["YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY"];
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            var playlistFolderPath = Path.Combine(workingDirectory, id.ToString());
+            var promptFilePath = Path.Combine(playlistFolderPath, "missing_suno_prompts.txt");
+            if (System.IO.File.Exists(promptFilePath))
+            {
+                foreach (var line in await System.IO.File.ReadAllLinesAsync(promptFilePath, cancellationToken))
+                {
+                    var match = Regex.Match(line, @"^(?<position>\d+):\s*(?<prompt>.+)$");
+                    if (!match.Success)
+                    {
+                        continue;
+                    }
+
+                    if (int.TryParse(match.Groups["position"].Value, out var position))
+                    {
+                        var prompt = match.Groups["prompt"].Value.Trim();
+                        if (!string.IsNullOrWhiteSpace(prompt))
+                        {
+                            prompts[position] = prompt;
+                        }
+                    }
+                }
+
+                if (prompts.Count > 0)
+                {
+                    sourceFileName = "missing_suno_prompts.txt";
+                }
+            }
+        }
+
+        if (prompts.Count == 0)
+        {
+            foreach (var track in playlist.Tracks)
+            {
+                var prompt = TryGetMetadataString(track.Metadata, "musicGenerationPrompt");
+                if (!string.IsNullOrWhiteSpace(prompt))
+                {
+                    prompts[track.PlaylistPosition] = prompt.Trim();
+                }
+            }
+        }
+
+        var items = playlist.Tracks
+            .OrderBy(track => track.PlaylistPosition)
+            .Where(track => prompts.ContainsKey(track.PlaylistPosition))
+            .Select(track => new PlaylistPromptItemResponse(
+                track.PlaylistPosition,
+                string.IsNullOrWhiteSpace(track.Title) ? $"Track {track.PlaylistPosition}" : track.Title.Trim(),
+                prompts[track.PlaylistPosition]))
+            .ToList();
+
+        return Results.Ok(new PlaylistPromptResponse(id, "music", sourceFileName, items));
+    }
+
+    private static string? TryGetMetadataString(string? metadata, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(metadata))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(metadata);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (!document.RootElement.TryGetProperty(propertyName, out var property))
+            {
+                return null;
+            }
+
+            return property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : property.ToString();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<IResult> SchedulePlaylistStartAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var payloadArguments = new CreatePlaylistInitJobArguments(id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "playlist-init",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.PlaylistInit,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistStartResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+    }
+
+    private static async Task<IResult> SchedulePlaylistGenerateImagesAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var payloadArguments = new CreateGenerateAllImagesJobArguments(id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "generate-all-images",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.GenerateAllImages,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistGenerateImagesResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+    }
+
+    private static async Task<IResult> SchedulePlaylistGenerateMusicAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var payloadArguments = new CreateGenerateAllMusicJobArguments(id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "generate-all-music",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.GenerateAllMusic,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistGenerateMusicResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+    }
+
+    private static async Task<IResult> SchedulePlaylistGenerateThumbnailsAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var payloadArguments = new CreateGenerateThumbnailsJobArguments(id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "track-create-youtube-video-thumbnail-v2",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.GenerateThumbnails,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistGenerateThumbnailsResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+    }
+
+    private static async Task<IResult> SchedulePlaylistGenerateVideosAsync(
+        Guid id,
+        SchedulePlaylistGenerateVideosRequest? request,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var profile = (request?.Profile ?? "fast").Trim().ToLowerInvariant();
+        if (profile is not ("legacy" or "quality" or "fast"))
+        {
+            return Results.BadRequest(new { message = "Profile must be one of: legacy, quality, fast" });
+        }
+
+        var payloadArguments = new CreateGenerateVideosJobArguments(id, profile);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "generate-media-local",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.GenerateVideos,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistGenerateVideosResponse(id, job.Id, job.Type.ToString(), job.Status.ToString(), profile));
+    }
+
+    private static async Task<IResult> SchedulePlaylistGenerateYoutubePlaylistAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        const string privacy = "unlisted";
+        var payloadArguments = new CreateGenerateYoutubePlaylistJobArguments(id, privacy);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "generate-youtube-playlist",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.GenerateYoutubePlaylist,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistGenerateYoutubePlaylistResponse(id, job.Id, job.Type.ToString(), job.Status.ToString(), privacy));
+    }
+
+    private static async Task<IResult> SchedulePlaylistUploadYoutubeVideosAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var payloadArguments = new CreateUploadYoutubeVideosJobArguments(id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "upload-youtube-videos",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.UploadYoutubeVideos,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistUploadYoutubeVideosResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
+    }
+
+    private static async Task<IResult> SchedulePlaylistAddYoutubeVideosToPlaylistAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var payloadArguments = new CreateAddYoutubeVideosToPlaylistJobArguments(id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "add-youtube-videos-to-playlist",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var job = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.AddYoutubeVideosToPlaylist,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return Results.Created(
+            $"/jobs/{job.Id}",
+            new SchedulePlaylistAddYoutubeVideosToPlaylistResponse(id, job.Id, job.Type.ToString(), job.Status.ToString()));
     }
 
     private static IResult GetPlaylistMediaFileAsync(

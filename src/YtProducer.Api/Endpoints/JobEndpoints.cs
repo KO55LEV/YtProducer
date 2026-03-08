@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using YtProducer.Contracts.Jobs;
 using YtProducer.Domain.Enums;
 using YtProducer.Domain.Entities;
+using YtProducer.Infrastructure.Persistence;
 using YtProducer.Infrastructure.Services;
 
 namespace YtProducer.Api.Endpoints;
@@ -15,6 +17,7 @@ public static class JobEndpoints
         group.MapPost("/", CreateJobAsync);
         group.MapGet("/", GetAllJobsAsync);
         group.MapGet("/{id:guid}", GetJobByIdAsync);
+        group.MapGet("/{id:guid}/logs", GetJobLogsAsync);
         group.MapGet("/track/{trackId:guid}", GetJobsByTrackIdAsync);
         group.MapGet("/group/{groupId:guid}", GetJobsByGroupIdAsync);
         group.MapPatch("/{id:guid}/progress", PatchProgressAsync);
@@ -54,6 +57,36 @@ public static class JobEndpoints
         var jobs = await jobService.GetByTargetAsync("track", trackId, cancellationToken);
         var response = jobs.Select(MapToJobResponse).ToList();
         return Results.Ok(response);
+    }
+
+    private static async Task<IResult> GetJobLogsAsync(
+        [FromRoute] Guid id,
+        [FromServices] YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var jobExists = await dbContext.Jobs
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!jobExists)
+        {
+            return Results.NotFound(new { message = $"Job {id} not found" });
+        }
+
+        var logs = await dbContext.JobLogs
+            .AsNoTracking()
+            .Where(x => x.JobId == id)
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .Select(x => new JobLogResponse(
+                x.Id,
+                x.JobId,
+                x.Level,
+                x.Message,
+                x.Metadata,
+                x.CreatedAtUtc))
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(logs);
     }
 
     private static async Task<IResult> GetJobsByGroupIdAsync(

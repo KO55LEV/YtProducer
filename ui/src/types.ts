@@ -42,6 +42,25 @@ export type PlaylistMediaResponse = {
   tracks: PlaylistTrackMedia[];
 };
 
+export type PlaylistPromptItem = {
+  playlistPosition: number;
+  trackTitle: string;
+  prompt: string;
+};
+
+export type PlaylistPromptResponse = {
+  playlistId: string;
+  promptType: string;
+  sourceFileName?: string | null;
+  prompts: PlaylistPromptItem[];
+};
+
+export type UpdatePlaylistStatusResponse = {
+  playlistId: string;
+  previousStatus: string;
+  status: string;
+};
+
 export type TrackVideoGeneration = {
   id: string;
   trackId: string;
@@ -126,4 +145,37 @@ export type YoutubePlaylist = {
   metadata?: string | null;
   createdAtUtc: string;
   updatedAtUtc: string;
+};
+
+export type Job = {
+  id: string;
+  type: string;
+  status: string;
+  targetType?: string | null;
+  targetId?: string | null;
+  jobGroupId?: string | null;
+  sequence?: number | null;
+  progress: number;
+  payloadJson?: string | null;
+  resultJson?: string | null;
+  retryCount: number;
+  maxRetries: number;
+  workerId?: string | null;
+  leaseExpiresAt?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  lastHeartbeat?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  idempotencyKey?: string | null;
+};
+
+export type JobLog = {
+  id: string;
+  jobId: string;
+  level: string;
+  message: string;
+  metadata?: string | null;
+  createdAtUtc: string;
 };

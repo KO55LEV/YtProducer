@@ -3,13 +3,27 @@ import { Link, useParams } from "react-router-dom";
 import type {
   Playlist,
   PlaylistMediaResponse,
+  PlaylistPromptResponse,
   PlaylistTrackMedia,
   ScheduleTrackLoopResponse,
   Track,
-  TrackVideoGeneration
+  TrackVideoGeneration,
+  UpdatePlaylistStatusResponse
 } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
+const playlistStatuses = [
+  "Draft",
+  "Active",
+  "Completed",
+  "Failed",
+  "OnYoutube",
+  "FolderCreated",
+  "ImagesGenerated",
+  "MusicGenerated",
+  "ThumbnailGenerated",
+  "VideoInProgress"
+] as const;
 
 function getEnergyColor(energyLevel?: number | null): string {
   if (!energyLevel) return "#6b7280";
@@ -44,6 +58,27 @@ export default function PlaylistDetail() {
   const [loopCountByTrackId, setLoopCountByTrackId] = useState<Record<string, number>>({});
   const [createLoopBusyByTrackId, setCreateLoopBusyByTrackId] = useState<Record<string, boolean>>({});
   const [createLoopJobIdByTrackId, setCreateLoopJobIdByTrackId] = useState<Record<string, string>>({});
+  const [generateImagesBusy, setGenerateImagesBusy] = useState(false);
+  const [generateImagesJobId, setGenerateImagesJobId] = useState<string | null>(null);
+  const [generateMusicBusy, setGenerateMusicBusy] = useState(false);
+  const [generateMusicJobId, setGenerateMusicJobId] = useState<string | null>(null);
+  const [generateThumbnailsBusy, setGenerateThumbnailsBusy] = useState(false);
+  const [generateThumbnailsJobId, setGenerateThumbnailsJobId] = useState<string | null>(null);
+  const [generateVideosBusy, setGenerateVideosBusy] = useState(false);
+  const [generateVideosJobId, setGenerateVideosJobId] = useState<string | null>(null);
+  const [generateVideosProfile, setGenerateVideosProfile] = useState<"fast" | "quality" | "legacy">("fast");
+  const [generateYoutubePlaylistBusy, setGenerateYoutubePlaylistBusy] = useState(false);
+  const [generateYoutubePlaylistJobId, setGenerateYoutubePlaylistJobId] = useState<string | null>(null);
+  const [uploadYoutubeVideosBusy, setUploadYoutubeVideosBusy] = useState(false);
+  const [uploadYoutubeVideosJobId, setUploadYoutubeVideosJobId] = useState<string | null>(null);
+  const [addYoutubeVideosToPlaylistBusy, setAddYoutubeVideosToPlaylistBusy] = useState(false);
+  const [addYoutubeVideosToPlaylistJobId, setAddYoutubeVideosToPlaylistJobId] = useState<string | null>(null);
+  const [musicPromptsOpen, setMusicPromptsOpen] = useState(false);
+  const [musicPromptsLoading, setMusicPromptsLoading] = useState(false);
+  const [musicPrompts, setMusicPrompts] = useState<PlaylistPromptResponse | null>(null);
+  const [copiedPromptPosition, setCopiedPromptPosition] = useState<number | null>(null);
+  const [selectedPlaylistStatus, setSelectedPlaylistStatus] = useState<string>("Draft");
+  const [updatePlaylistStatusBusy, setUpdatePlaylistStatusBusy] = useState(false);
 
   const resolveMediaUrl = useMemo(() => {
     return (url: string) => (url.startsWith("http") ? url : `${apiBaseUrl}${url}`);
@@ -63,6 +98,7 @@ export default function PlaylistDetail() {
 
         const data = (await response.json()) as Playlist;
         setPlaylist(data);
+        setSelectedPlaylistStatus(data.status);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -333,6 +369,247 @@ export default function PlaylistDetail() {
     }
   }
 
+  async function handleGenerateImages(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setGenerateImagesBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/generate-images`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Generate images failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setGenerateImagesJobId(data.jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generate images failed");
+    } finally {
+      setGenerateImagesBusy(false);
+    }
+  }
+
+  async function handleGenerateMusic(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setGenerateMusicBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/generate-music`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Generate music failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setGenerateMusicJobId(data.jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generate music failed");
+    } finally {
+      setGenerateMusicBusy(false);
+    }
+  }
+
+  async function handleGenerateThumbnails(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setGenerateThumbnailsBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/generate-thumbnails`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Generate thumbnails failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setGenerateThumbnailsJobId(data.jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generate thumbnails failed");
+    } finally {
+      setGenerateThumbnailsBusy(false);
+    }
+  }
+
+  async function handleGenerateVideos(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setGenerateVideosBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/generate-videos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile: generateVideosProfile
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Generate videos failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setGenerateVideosJobId(data.jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generate videos failed");
+    } finally {
+      setGenerateVideosBusy(false);
+    }
+  }
+
+  async function handleGenerateYoutubePlaylist(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setGenerateYoutubePlaylistBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/generate-youtube-playlist`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Create playlist failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setGenerateYoutubePlaylistJobId(data.jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Create playlist failed");
+    } finally {
+      setGenerateYoutubePlaylistBusy(false);
+    }
+  }
+
+  async function handleUploadYoutubeVideos(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setUploadYoutubeVideosBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/upload-youtube-videos`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload videos failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setUploadYoutubeVideosJobId(data.jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload videos failed");
+    } finally {
+      setUploadYoutubeVideosBusy(false);
+    }
+  }
+
+  async function handleAddYoutubeVideosToPlaylist(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setAddYoutubeVideosToPlaylistBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/add-youtube-videos-to-playlist`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Add videos to playlist failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setAddYoutubeVideosToPlaylistJobId(data.jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Add videos to playlist failed");
+    } finally {
+      setAddYoutubeVideosToPlaylistBusy(false);
+    }
+  }
+
+  async function handleOpenMusicPrompts(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setMusicPromptsLoading(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/music-prompts`);
+      if (!response.ok) {
+        throw new Error(`Music prompts failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as PlaylistPromptResponse;
+      setMusicPrompts(data);
+      setMusicPromptsOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Music prompts failed");
+    } finally {
+      setMusicPromptsLoading(false);
+    }
+  }
+
+  async function handleCopyPrompt(position: number, prompt: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopiedPromptPosition(position);
+      window.setTimeout(() => {
+        setCopiedPromptPosition((current) => (current === position ? null : current));
+      }, 1400);
+    } catch {
+      // ignore clipboard failures
+    }
+  }
+
+  async function handleUpdatePlaylistStatus(): Promise<void> {
+    if (!id || !playlist) return;
+
+    try {
+      setUpdatePlaylistStatusBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/status`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: selectedPlaylistStatus
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Update playlist status failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as UpdatePlaylistStatusResponse;
+      setPlaylist((current) =>
+        current
+          ? {
+              ...current,
+              status: data.status
+            }
+          : current
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Update playlist status failed");
+    } finally {
+      setUpdatePlaylistStatusBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!id) return;
 
@@ -378,19 +655,49 @@ export default function PlaylistDetail() {
       <Link to="/" className="breadcrumb">← Back to Playlists</Link>
 
       <div className="playlist-header">
-        <div className="playlist-info">
-          <h1 className="playlist-title-large">{playlist.title}</h1>
-          {playlist.theme && (
-            <div className="playlist-theme-badge">🎵 {playlist.theme}</div>
-          )}
-          {playlist.description && (
-            <p className="playlist-description-large">{playlist.description}</p>
-          )}
-          {playlist.playlistStrategy && (
-            <div className="playlist-strategy">
-              <strong>Strategy:</strong> {playlist.playlistStrategy}
+        <div className="playlist-header-layout">
+          <div className="playlist-info">
+            <h1 className="playlist-title-large">{playlist.title}</h1>
+            <div className="playlist-theme-row">
+              {playlist.theme && (
+                <div className="playlist-theme-badge">🎵 {playlist.theme}</div>
+              )}
+              <div className="playlist-status-panel">
+                <div className="playlist-status-current">
+                  <span className="playlist-status-label">Current Status</span>
+                  <span className="playlist-status-pill">{playlist.status}</span>
+                </div>
+                <div className="playlist-status-editor">
+                  <select
+                    className="playlist-status-select"
+                    value={selectedPlaylistStatus}
+                    onChange={(event) => setSelectedPlaylistStatus(event.target.value)}
+                  >
+                    {playlistStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="playlist-status-apply"
+                    onClick={() => void handleUpdatePlaylistStatus()}
+                    disabled={updatePlaylistStatusBusy || selectedPlaylistStatus === playlist.status}
+                  >
+                    {updatePlaylistStatusBusy ? "Saving..." : "Set"}
+                  </button>
+                </div>
+              </div>
             </div>
-          )}
+            {playlist.description && (
+              <p className="playlist-description-large">{playlist.description}</p>
+            )}
+            {playlist.playlistStrategy && (
+              <div className="playlist-strategy">
+                <strong>Strategy:</strong> {playlist.playlistStrategy}
+              </div>
+            )}
           <div className="playlist-meta">
             <span>{playlist.trackCount} tracks</span>
             <span>Created {new Date(playlist.createdAtUtc).toLocaleDateString()}</span>
@@ -398,16 +705,135 @@ export default function PlaylistDetail() {
               <span>Published {new Date(playlist.publishedAtUtc).toLocaleDateString()}</span>
             )}
           </div>
-          <div className="playlist-toolbar">
+          <div className="playlist-meta-actions">
             <button
               type="button"
-              className={`playlist-toggle ${showThumbnail ? "is-active" : ""}`}
-              onClick={() => setShowThumbnail((prev) => !prev)}
-              aria-pressed={showThumbnail}
+              className="playlist-meta-btn"
+              onClick={() => void handleOpenMusicPrompts()}
+              disabled={musicPromptsLoading}
             >
-              Show Thumbnail
+              {musicPromptsLoading ? "Loading..." : "Music Prompts"}
             </button>
           </div>
+        </div>
+
+          <aside className="playlist-actions-panel">
+            <div className="playlist-actions-grid">
+              <section className="playlist-actions-column">
+                <div className="playlist-toolbar-title">Generate</div>
+                <div className="playlist-toolbar">
+                  <button
+                    type="button"
+                    className="playlist-action-btn"
+                    onClick={() => void handleGenerateImages()}
+                    disabled={generateImagesBusy}
+                  >
+                    {generateImagesBusy ? "Scheduling..." : "Generate Images"}
+                  </button>
+                  {generateImagesJobId && (
+                    <span className="playlist-action-status">Scheduled</span>
+                  )}
+                  <button
+                    type="button"
+                    className="playlist-action-btn"
+                    onClick={() => void handleGenerateMusic()}
+                    disabled={generateMusicBusy}
+                  >
+                    {generateMusicBusy ? "Scheduling..." : "Generate Music"}
+                  </button>
+                  {generateMusicJobId && (
+                    <span className="playlist-action-status">Scheduled</span>
+                  )}
+                  <button
+                    type="button"
+                    className="playlist-action-btn"
+                    onClick={() => void handleGenerateThumbnails()}
+                    disabled={generateThumbnailsBusy}
+                  >
+                    {generateThumbnailsBusy ? "Scheduling..." : "Generate Thumbnails"}
+                  </button>
+                  {generateThumbnailsJobId && (
+                    <span className="playlist-action-status">Scheduled</span>
+                  )}
+                  <label className="playlist-profile-picker">
+                    <span>Video Mode</span>
+                    <select
+                      value={generateVideosProfile}
+                      onChange={(event) =>
+                        setGenerateVideosProfile(event.target.value as "fast" | "quality" | "legacy")
+                      }
+                    >
+                      <option value="fast">fast</option>
+                      <option value="quality">quality</option>
+                      <option value="legacy">legacy</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="playlist-action-btn"
+                    onClick={() => void handleGenerateVideos()}
+                    disabled={generateVideosBusy}
+                  >
+                    {generateVideosBusy ? "Scheduling..." : "Generate Videos"}
+                  </button>
+                  {generateVideosJobId && (
+                    <span className="playlist-action-status">Scheduled</span>
+                  )}
+                </div>
+              </section>
+
+              <section className="playlist-actions-column">
+                <div className="playlist-toolbar-title">YouTube</div>
+                <div className="playlist-toolbar">
+                  <button
+                    type="button"
+                    className="playlist-action-btn playlist-action-btn-secondary"
+                    onClick={() => void handleGenerateYoutubePlaylist()}
+                    disabled={generateYoutubePlaylistBusy}
+                  >
+                    {generateYoutubePlaylistBusy ? "Scheduling..." : "Create Playlist"}
+                  </button>
+                  {generateYoutubePlaylistJobId && (
+                    <span className="playlist-action-status">Scheduled</span>
+                  )}
+                  <button
+                    type="button"
+                    className="playlist-action-btn playlist-action-btn-secondary"
+                    onClick={() => void handleUploadYoutubeVideos()}
+                    disabled={uploadYoutubeVideosBusy}
+                  >
+                    {uploadYoutubeVideosBusy ? "Scheduling..." : "Upload Videos"}
+                  </button>
+                  {uploadYoutubeVideosJobId && (
+                    <span className="playlist-action-status">Scheduled</span>
+                  )}
+                  <button
+                    type="button"
+                    className="playlist-action-btn playlist-action-btn-secondary"
+                    onClick={() => void handleAddYoutubeVideosToPlaylist()}
+                    disabled={addYoutubeVideosToPlaylistBusy}
+                  >
+                    {addYoutubeVideosToPlaylistBusy ? "Scheduling..." : "Add Videos To Playlist"}
+                  </button>
+                  {addYoutubeVideosToPlaylistJobId && (
+                    <span className="playlist-action-status">Scheduled</span>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            <div className="playlist-actions-footer">
+              <div className="playlist-toolbar-title">View</div>
+              <button
+                type="button"
+                className={`playlist-toggle ${showThumbnail ? "is-active" : ""}`}
+                onClick={() => setShowThumbnail((prev) => !prev)}
+                aria-pressed={showThumbnail}
+              >
+                Show Thumbnail
+              </button>
+            </div>
+          </aside>
         </div>
       </div>
 
@@ -884,6 +1310,56 @@ export default function PlaylistDetail() {
             </div>
           );
         })()}
+
+      {musicPromptsOpen && (
+        <div
+          className="prompts-modal"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setMusicPromptsOpen(false)}
+        >
+          <div className="prompts-modal-content" onClick={(event) => event.stopPropagation()}>
+            <div className="prompts-modal-header">
+              <div>
+                <h3>Music Prompts</h3>
+                <p>
+                  {musicPrompts?.sourceFileName
+                    ? `Source: ${musicPrompts.sourceFileName}`
+                    : "Source: track metadata"}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="prompts-modal-close"
+                onClick={() => setMusicPromptsOpen(false)}
+                aria-label="Close music prompts"
+              >
+                ×
+              </button>
+            </div>
+            <div className="prompts-modal-list">
+              {(musicPrompts?.prompts ?? []).map((item) => (
+                <article key={item.playlistPosition} className="prompt-card">
+                  <div className="prompt-card-header">
+                    <div className="prompt-card-title">
+                      <span className="prompt-card-position">#{item.playlistPosition}</span>
+                      <span className="prompt-card-track">{item.trackTitle}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="prompt-copy-btn"
+                      onClick={() => void handleCopyPrompt(item.playlistPosition, item.prompt)}
+                    >
+                      {copiedPromptPosition === item.playlistPosition ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <pre className="prompt-card-text">{item.prompt}</pre>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

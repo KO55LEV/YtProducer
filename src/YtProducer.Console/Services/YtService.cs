@@ -110,35 +110,53 @@ public class YtService
             return;
         }
 
-        var pendingJobs = await _context.Jobs
-            .Where(x => x.Status == JobStatus.Pending)
-            .OrderBy(x => x.CreatedAt)
-            .ToListAsync();
-
-        if (pendingJobs.Count == 0)
-        {
-            global::System.Console.WriteLine("No pending jobs found.");
-            return;
-        }
-
         var completed = 0;
         var failed = 0;
+        var idleDelay = TimeSpan.FromSeconds(5);
 
-        foreach (var job in pendingJobs)
+        global::System.Console.WriteLine("process-all-jobs worker started");
+
+        while (true)
         {
-            var success = await ProcessJobInternalAsync(job);
-            if (success)
-            {
-                completed++;
-            }
-            else
-            {
-                failed++;
-            }
-        }
+            _context.ChangeTracker.Clear();
 
-        global::System.Console.WriteLine(
-            $"process-all-jobs summary total={pendingJobs.Count} completed={completed} failed={failed}");
+            var pendingJobIds = await _context.Jobs
+                .AsNoTracking()
+                .Where(x => x.Status == JobStatus.Pending)
+                .OrderBy(x => x.CreatedAt)
+                .Select(x => x.Id)
+                .ToListAsync();
+
+            if (pendingJobIds.Count == 0)
+            {
+                await Task.Delay(idleDelay);
+                continue;
+            }
+
+            foreach (var jobId in pendingJobIds)
+            {
+                _context.ChangeTracker.Clear();
+
+                var job = await _context.Jobs.FirstOrDefaultAsync(x => x.Id == jobId);
+                if (job == null || job.Status != JobStatus.Pending)
+                {
+                    continue;
+                }
+
+                var success = await ProcessJobInternalAsync(job);
+                if (success)
+                {
+                    completed++;
+                }
+                else
+                {
+                    failed++;
+                }
+            }
+
+            global::System.Console.WriteLine(
+                $"process-all-jobs heartbeat completed={completed} failed={failed}");
+        }
     }
 
     private async Task<bool> ProcessJobInternalAsync(Job job)
@@ -279,9 +297,255 @@ public class YtService
 
         return command.ToLowerInvariant() switch
         {
+            "playlist-init" => await ProcessPlaylistInitJobAsync(job, payload),
+            "generate-all-images" => await ProcessGenerateAllImagesJobAsync(job, payload),
+            "generate-all-music" => await ProcessGenerateAllMusicJobAsync(job, payload),
+            "track-create-youtube-video-thumbnail-v2" => await ProcessGenerateThumbnailsJobAsync(job, payload),
+            "generate-media-local" => await ProcessGenerateVideosJobAsync(job, payload),
+            "generate-youtube-playlist" => await ProcessGenerateYoutubePlaylistJobAsync(job, payload),
+            "upload-youtube-videos" => await ProcessUploadYoutubeVideosJobAsync(job, payload),
+            "add-youtube-videos-to-playlist" => await ProcessAddYoutubeVideosToPlaylistJobAsync(job, payload),
             "create-track-loop" => await ProcessCreateTrackLoopJobAsync(job, payload),
             _ => throw new InvalidOperationException($"Unsupported scheduled command: {command}")
         };
+    }
+
+    private async Task<string> ProcessPlaylistInitJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreatePlaylistInitJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("playlist-init arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Playlist init started playlist_id={arguments.PlaylistId}");
+        await RunPlaylistPipelineAsync(arguments.PlaylistId);
+        await AppendJobLogAsync(job.Id, "Info", $"Playlist init completed playlist_id={arguments.PlaylistId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId
+        });
+    }
+
+    private async Task<string> ProcessGenerateAllImagesJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateGenerateAllImagesJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("generate-all-images arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate all images started playlist_id={arguments.PlaylistId}");
+        await RunGenerateAllImagesAsync(new[] { arguments.PlaylistId.ToString() });
+        await AppendJobLogAsync(job.Id, "Info", $"Generate all images completed playlist_id={arguments.PlaylistId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId
+        });
+    }
+
+    private async Task<string> ProcessGenerateAllMusicJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateGenerateAllMusicJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("generate-all-music arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate all music started playlist_id={arguments.PlaylistId}");
+        await RunGenerateAllMusicAsync(new[] { arguments.PlaylistId.ToString() });
+        await AppendJobLogAsync(job.Id, "Info", $"Generate all music completed playlist_id={arguments.PlaylistId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId
+        });
+    }
+
+    private async Task<string> ProcessGenerateThumbnailsJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateGenerateThumbnailsJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("track-create-youtube-video-thumbnail-v2 arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate thumbnails started playlist_id={arguments.PlaylistId}");
+        await RunTrackCreateYoutubeVideoThumbnailV2Async(new[] { arguments.PlaylistId.ToString() });
+        await AppendJobLogAsync(job.Id, "Info", $"Generate thumbnails completed playlist_id={arguments.PlaylistId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId
+        });
+    }
+
+    private async Task<string> ProcessGenerateVideosJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateGenerateVideosJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("generate-media-local arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        var profile = arguments.Profile?.Trim().ToLowerInvariant();
+        if (profile is not ("legacy" or "quality" or "fast"))
+        {
+            throw new InvalidOperationException($"Unsupported generate-media-local profile: {arguments.Profile}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate videos started playlist_id={arguments.PlaylistId} profile={profile}");
+        await RunGenerateMediaLocalAsync(new[] { arguments.PlaylistId.ToString(), profile });
+        await AppendJobLogAsync(job.Id, "Info", $"Generate videos completed playlist_id={arguments.PlaylistId} profile={profile}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId,
+            profile
+        });
+    }
+
+    private async Task<string> ProcessGenerateYoutubePlaylistJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateGenerateYoutubePlaylistJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("generate-youtube-playlist arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        var privacy = arguments.Privacy?.Trim().ToLowerInvariant();
+        if (privacy is not ("private" or "unlisted" or "public"))
+        {
+            throw new InvalidOperationException($"Unsupported generate-youtube-playlist privacy: {arguments.Privacy}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate YouTube playlist started playlist_id={arguments.PlaylistId} privacy={privacy}");
+        await RunGenerateYoutubePlaylistAsync(new[] { arguments.PlaylistId.ToString(), privacy });
+        await AppendJobLogAsync(job.Id, "Info", $"Generate YouTube playlist completed playlist_id={arguments.PlaylistId} privacy={privacy}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId,
+            privacy
+        });
+    }
+
+    private async Task<string> ProcessUploadYoutubeVideosJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateUploadYoutubeVideosJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("upload-youtube-videos arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Upload YouTube videos started playlist_id={arguments.PlaylistId}");
+        await RunUploadYoutubeVideosAsync(new[] { arguments.PlaylistId.ToString() });
+        await AppendJobLogAsync(job.Id, "Info", $"Upload YouTube videos completed playlist_id={arguments.PlaylistId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId
+        });
+    }
+
+    private async Task<string> ProcessAddYoutubeVideosToPlaylistJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateAddYoutubeVideosToPlaylistJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("add-youtube-videos-to-playlist arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Add YouTube videos to playlist started playlist_id={arguments.PlaylistId}");
+        await RunAddYoutubeVideosToPlaylistAsync(new[] { arguments.PlaylistId.ToString() });
+        await AppendJobLogAsync(job.Id, "Info", $"Add YouTube videos to playlist completed playlist_id={arguments.PlaylistId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId
+        });
     }
 
     private async Task<string> ProcessCreateTrackLoopJobAsync(Job job, ScheduledCommandPayload payload)
@@ -388,11 +652,33 @@ public class YtService
 
         var loopThumbnailPath = await CreateLoopThumbnailAsync(job.Id, loop, track, playlist, loopRoot);
 
+        var loopYoutubeMetadata = await BuildLoopYoutubeMetadataAsync(track, playlist, loop, outputVideoPath);
+        await AppendJobLogAsync(
+            job.Id,
+            "Info",
+            $"Loop YouTube metadata prepared title={loopYoutubeMetadata.Title} duration_minutes={loopYoutubeMetadata.DurationMinutes}");
+
+        var youtubeUpload = await UploadLoopToYoutubeAsync(
+            job.Id,
+            loop,
+            outputVideoPath,
+            loopThumbnailPath,
+            loopYoutubeMetadata.Title,
+            loopYoutubeMetadata.Description);
+        if (!youtubeUpload.Success)
+        {
+            throw new InvalidOperationException(youtubeUpload.ErrorMessage ?? "Loop YouTube upload failed.");
+        }
+
         loop.OutputVideoPath = outputVideoPath;
         loop.ThumbnailPath = loopThumbnailPath;
+        loop.YoutubeVideoId = youtubeUpload.VideoId;
+        loop.YoutubeUrl = youtubeUpload.Url;
+        loop.Title = loopYoutubeMetadata.Title;
+        loop.Description = loopYoutubeMetadata.Description;
         loop.FinishedAtUtc = DateTimeOffset.UtcNow;
         loop.UpdatedAtUtc = loop.FinishedAtUtc.Value;
-        loop.Status = TrackLoopStatus.Completed;
+        loop.Status = TrackLoopStatus.UploadedToYoutube;
         loop.Metadata = JsonSerializer.Serialize(new
         {
             requestManifestPath = manifestPath,
@@ -401,11 +687,40 @@ public class YtService
             jobId = job.Id,
             preparedAtUtc = DateTimeOffset.UtcNow,
             completedAtUtc = loop.FinishedAtUtc,
-            loopThumbnailPath
+            loopThumbnailPath,
+            youtubeVideoId = youtubeUpload.VideoId,
+            youtubeUrl = youtubeUpload.Url,
+            hashtags = loopYoutubeMetadata.Hashtags,
+            loopRoot
         });
         await _context.SaveChangesAsync();
 
-        await AppendJobLogAsync(job.Id, "Info", $"Loop video created output={outputVideoPath} thumbnail={loopThumbnailPath}");
+        await AppendJobLogAsync(job.Id, "Info", $"Loop video created output={outputVideoPath} thumbnail={loopThumbnailPath} youtube_video_id={youtubeUpload.VideoId}");
+
+        var keepLoopTemp = string.Equals(
+            Environment.GetEnvironmentVariable("YT_PRODUCER_LOOP_KEEP_TEMP"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (!keepLoopTemp)
+        {
+            try
+            {
+                if (Directory.Exists(loopRoot))
+                {
+                    Directory.Delete(loopRoot, recursive: true);
+                    await AppendJobLogAsync(job.Id, "Info", $"Loop working directory deleted path={loopRoot}");
+                }
+            }
+            catch (Exception ex)
+            {
+                await AppendJobLogAsync(job.Id, "Warning", $"Loop working directory cleanup failed path={loopRoot} error={ex.Message}");
+            }
+        }
+        else
+        {
+            await AppendJobLogAsync(job.Id, "Info", $"Loop working directory kept path={loopRoot}");
+        }
 
         job.Progress = 100;
         job.LastHeartbeat = DateTimeOffset.UtcNow;
@@ -420,6 +735,8 @@ public class YtService
             loopRoot,
             outputVideoPath,
             loopThumbnailPath,
+            youtubeVideoId = youtubeUpload.VideoId,
+            youtubeUrl = youtubeUpload.Url,
             sourceAudioPath = loop.SourceAudioPath,
             sourceImagePath = loop.SourceImagePath,
             sourceVideoPath = loop.SourceVideoPath
@@ -623,6 +940,353 @@ public class YtService
         }
 
         return response.OutputPath;
+    }
+
+    private async Task<LoopYoutubeMetadata> BuildLoopYoutubeMetadataAsync(Track track, Playlist playlist, TrackLoop loop, string outputVideoPath)
+    {
+        var durationSeconds = await ProbeMediaDurationSecondsAsync(outputVideoPath)
+            ?? await ProbeMediaDurationSecondsAsync(loop.SourceVideoPath)
+            ?? ParseTrackDurationSeconds(track.Duration)
+            ?? 0d;
+        var durationMinutes = Math.Max(1, (int)Math.Ceiling(durationSeconds / 60d));
+
+        var hookType = TryGetMetadataString(track.Metadata, "hookType");
+        var listeningScenario = FirstNonEmpty(
+            TryGetMetadataString(track.Metadata, "listeningScenario"),
+            TryGetMetadataString(track.Metadata, "playlistCategory"),
+            TryGetMetadataString(playlist.Metadata, "playlistCategory"),
+            "gym workouts");
+        var targetAudience = FirstNonEmpty(
+            TryGetMetadataString(track.Metadata, "targetAudience"),
+            "workout listeners");
+        var style = FirstNonEmpty(track.Style, TryExtractFieldFromPrompt(TryGetMetadataString(track.Metadata, "musicGenerationPrompt"), "Subgenre"), "Workout");
+        var genre = FirstNonEmpty(
+            TryExtractFieldFromPrompt(TryGetMetadataString(track.Metadata, "musicGenerationPrompt"), "Subgenre"),
+            TryExtractFieldFromPrompt(TryGetMetadataString(track.Metadata, "musicGenerationPrompt"), "Genre"),
+            style,
+            "Workout");
+        var bpm = track.TempoBpm;
+        var title = BuildLoopYoutubeTitle(hookType, bpm, genre, durationMinutes);
+        var hashtags = BuildLoopHashtags(track, playlist, genre);
+        var description = BuildLoopYoutubeDescription(
+            track,
+            playlist,
+            hookType,
+            genre,
+            listeningScenario,
+            targetAudience,
+            durationMinutes,
+            hashtags);
+
+        return new LoopYoutubeMetadata(title, description, hashtags, durationMinutes);
+    }
+
+    private async Task<YoutubeUploadVideoResult> UploadLoopToYoutubeAsync(
+        Guid jobId,
+        TrackLoop loop,
+        string videoPath,
+        string? thumbnailPath,
+        string title,
+        string description)
+    {
+        var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
+        {
+            return YoutubeUploadVideoResult.Fail("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY is not configured.");
+        }
+
+        var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_PROJECT")
+            ?? "OnlineTeamTools.MCP.YouTube/OnlineTeamTools.MCP.YouTube.csproj";
+
+        var loopWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_LOOP_WORKING_DIRECTORY");
+        var allowedRoot = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_ALLOWED_ROOT")
+            ?? loopWorkingDirectory
+            ?? Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
+
+        var publishState = await GetOrCreateYoutubeLastPublishedDateAsync();
+        var publishAt = GetNextYoutubePublishSlotUtc(publishState.LastPublishedDate);
+        var scheduledPrivacy = "private";
+
+        await AppendJobLogAsync(
+            jobId,
+            "Info",
+            $"Loop YouTube upload scheduled video_path={videoPath} publish_at_utc={publishAt:yyyy-MM-ddTHH:mm:ssZ} privacy={scheduledPrivacy}");
+
+        await AppendJobLogAsync(
+            jobId,
+            "Info",
+            $"Loop YouTube video upload started playlist_id={loop.PlaylistId} track_position={loop.TrackPosition}");
+
+        var result = await ExecuteYoutubeUploadVideoAsync(
+            mcpWorkingDirectory,
+            mcpProject,
+            allowedRoot,
+            videoPath,
+            title,
+            description,
+            scheduledPrivacy,
+            publishAt);
+
+        if (!result.Success || string.IsNullOrWhiteSpace(result.VideoId))
+        {
+            await AppendJobLogAsync(
+                jobId,
+                "Error",
+                $"Loop YouTube video upload failed error={result.ErrorMessage}");
+            return result;
+        }
+
+        await AppendJobLogAsync(
+            jobId,
+            "Info",
+            $"Loop YouTube video upload completed video_id={result.VideoId} url={result.Url}");
+
+        if (!string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath))
+        {
+            await AppendJobLogAsync(
+                jobId,
+                "Info",
+                $"Loop YouTube thumbnail upload started thumbnail_path={thumbnailPath} video_id={result.VideoId}");
+
+            var thumbnailResult = await ExecuteYoutubeUploadThumbnailAsync(
+                mcpWorkingDirectory,
+                mcpProject,
+                allowedRoot,
+                result.VideoId,
+                thumbnailPath);
+
+            if (!thumbnailResult.Success)
+            {
+                await AppendJobLogAsync(
+                    jobId,
+                    "Error",
+                    $"Loop YouTube thumbnail upload failed video_id={result.VideoId} error={thumbnailResult.ErrorMessage}");
+                return YoutubeUploadVideoResult.Fail($"video uploaded but thumbnail failed: {thumbnailResult.ErrorMessage}");
+            }
+
+            await AppendJobLogAsync(
+                jobId,
+                "Info",
+                $"Loop YouTube thumbnail upload completed video_id={result.VideoId}");
+        }
+        else
+        {
+            await AppendJobLogAsync(
+                jobId,
+                "Warning",
+                $"Loop YouTube thumbnail upload skipped because thumbnail file is missing path={thumbnailPath ?? "-"}");
+        }
+
+        if (publishAt > publishState.LastPublishedDate)
+        {
+            publishState.LastPublishedDate = publishAt;
+            publishState.VideoId = result.VideoId;
+            await _context.SaveChangesAsync();
+
+            await AppendJobLogAsync(
+                jobId,
+                "Info",
+                $"Loop publish state updated next_last_published_date={publishAt:yyyy-MM-ddTHH:mm:ssZ} video_id={result.VideoId}");
+        }
+        else
+        {
+            await AppendJobLogAsync(
+                jobId,
+                "Info",
+                $"Loop publish state unchanged existing_last_published_date={publishState.LastPublishedDate:yyyy-MM-ddTHH:mm:ssZ}");
+        }
+
+        return result;
+    }
+
+    private static string BuildLoopYoutubeTitle(string? hookType, int? tempoBpm, string? style, int durationMinutes)
+    {
+        var styleToken = string.IsNullOrWhiteSpace(style) ? "Workout" : style.Trim();
+        var bpmToken = tempoBpm.HasValue ? $"{tempoBpm.Value} BPM " : string.Empty;
+        var hookToken = string.IsNullOrWhiteSpace(hookType) ? string.Empty : $"{NormalizeHeadline(hookType)} ⚡ ";
+        var title = $"{hookToken}{bpmToken}{styleToken} Workout Music | Gym Focus & Motivation | {durationMinutes} Min Loop".Trim();
+
+        if (title.Length <= 90)
+        {
+            return title;
+        }
+
+        var shorter = $"{hookToken}{bpmToken}{styleToken} Workout | {durationMinutes} Min Loop".Trim();
+        if (shorter.Length <= 90)
+        {
+            return shorter;
+        }
+
+        return shorter.Length <= 90 ? shorter : shorter[..90].TrimEnd();
+    }
+
+    private static string BuildLoopYoutubeDescription(
+        Track track,
+        Playlist playlist,
+        string? hookType,
+        string genre,
+        string listeningScenario,
+        string targetAudience,
+        int durationMinutes,
+        IReadOnlyList<string> hashtags)
+    {
+        var bpmToken = track.TempoBpm.HasValue ? $"{track.TempoBpm.Value} BPM" : "steady BPM";
+        var keyToken = string.IsNullOrWhiteSpace(track.Key) ? "n/a" : track.Key.Trim();
+        var energyToken = track.EnergyLevel.HasValue ? $"{track.EnergyLevel.Value}/10" : "n/a";
+        var brandName = Environment.GetEnvironmentVariable("YT_PRODUCER_BRAND_NAME")?.Trim();
+        if (string.IsNullOrWhiteSpace(brandName))
+        {
+            brandName = "AuruZ Music";
+        }
+
+        var subscribeLink = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_SUBSCRIBE_LINK")?.Trim();
+        if (string.IsNullOrWhiteSpace(subscribeLink))
+        {
+            subscribeLink = "[Link]";
+        }
+
+        var lines = new List<string>
+        {
+            $"{genre} workout music loop for gym focus, cardio training and motivation from {brandName}.",
+            $"This {durationMinutes} minute loop keeps your {bpmToken} rhythm locked in for {listeningScenario}.",
+            string.Empty,
+            "Benefits:",
+            $"- Great for {listeningScenario}",
+            "- Helps maintain focus and workout consistency",
+            $"- Built for {targetAudience}",
+            string.Empty,
+            "Track Info:",
+            $"- Title: {track.Title}",
+            $"- Genre: {genre}",
+            $"- BPM: {bpmToken}",
+            $"- Key: {keyToken}",
+            $"- Energy: {energyToken}",
+            $"{(string.IsNullOrWhiteSpace(hookType) ? string.Empty : $"- Hook: {hookType.Trim()}")}".Trim(),
+            string.Empty,
+            $"Loop Info: This is a continuous {durationMinutes} minute loop version for longer workouts, treadmill sessions and repeat training blocks.",
+            string.Empty,
+            $"Playlist Context: {playlist.Title}{(string.IsNullOrWhiteSpace(playlist.Description) ? string.Empty : $" - {playlist.Description!.Trim()}")}",
+            string.Empty,
+            $"Subscribe for more gym loops and workout motivation: {subscribeLink}"
+        };
+
+        if (hashtags.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add(string.Join(" ", hashtags));
+        }
+
+        return string.Join(Environment.NewLine, lines.Where(x => !string.IsNullOrWhiteSpace(x) || x == string.Empty)).Trim();
+    }
+
+    private static IReadOnlyList<string> BuildLoopHashtags(Track track, Playlist playlist, string genre)
+    {
+        var tags = TryGetMetadataStringArray(track.Metadata, "youtubeTags");
+        if (tags.Count == 0)
+        {
+            tags = TryGetMetadataStringArray(playlist.Metadata, "youtubeTags");
+        }
+
+        var normalized = tags
+            .Select(NormalizeHashtag)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(6)
+            .ToList();
+
+        if (normalized.Count == 0)
+        {
+            normalized.AddRange(new[]
+            {
+                "#AuruZ",
+                "#GymMusic",
+                NormalizeHashtag(genre),
+                "#WorkoutMotivation",
+                "#FocusMusic",
+                "#Loop"
+            }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
+        return normalized.Take(8).ToList();
+    }
+
+    private static string? NormalizeHashtag(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var compact = Regex.Replace(value, @"[^a-zA-Z0-9]+", string.Empty);
+        if (string.IsNullOrWhiteSpace(compact))
+        {
+            return null;
+        }
+
+        return $"#{compact}";
+    }
+
+    private static async Task<double?> ProbeMediaDurationSecondsAsync(string? mediaPath)
+    {
+        if (string.IsNullOrWhiteSpace(mediaPath) || !File.Exists(mediaPath))
+        {
+            return null;
+        }
+
+        var ffprobePath = Environment.GetEnvironmentVariable("FFPROBE_PATH") ?? "ffprobe";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = ffprobePath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-v");
+        startInfo.ArgumentList.Add("error");
+        startInfo.ArgumentList.Add("-show_entries");
+        startInfo.ArgumentList.Add("format=duration");
+        startInfo.ArgumentList.Add("-of");
+        startInfo.ArgumentList.Add("default=noprint_wrappers=1:nokey=1");
+        startInfo.ArgumentList.Add(mediaPath);
+
+        using var process = new Process { StartInfo = startInfo };
+        process.Start();
+        var stdOut = await process.StandardOutput.ReadToEndAsync();
+        await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        if (process.ExitCode != 0)
+        {
+            return null;
+        }
+
+        return double.TryParse(stdOut.Trim(), out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static double? ParseTrackDurationSeconds(string? duration)
+    {
+        if (string.IsNullOrWhiteSpace(duration))
+        {
+            return null;
+        }
+
+        if (TimeSpan.TryParse(duration, out var parsed))
+        {
+            return parsed.TotalSeconds;
+        }
+
+        var parts = duration.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 2 &&
+            int.TryParse(parts[0], out var minutes) &&
+            int.TryParse(parts[1], out var seconds))
+        {
+            return (minutes * 60) + seconds;
+        }
+
+        return null;
     }
 
     private static string QuoteCommandArgument(string arg)
@@ -6806,6 +7470,12 @@ public class YtService
     }
 
     private sealed record LoopConcatResult(bool Success, string CommandLine, string? ErrorMessage);
+
+    private sealed record LoopYoutubeMetadata(
+        string Title,
+        string Description,
+        IReadOnlyList<string> Hashtags,
+        int DurationMinutes);
 
     private sealed record PromptMetadata(string? ImagePrompt, string? SunoPrompt);
 
