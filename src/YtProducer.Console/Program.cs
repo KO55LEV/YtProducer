@@ -31,6 +31,8 @@ services.AddInfrastructure(configuration);
 // Add HTTP client for API communication
 services.AddHttpClient<ApiClient>();
 
+services.AddSingleton<YoutubeSeoService>();
+
 // Add YT service
 services.AddScoped<YtService>();
 

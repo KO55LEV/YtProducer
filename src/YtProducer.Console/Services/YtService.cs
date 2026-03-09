@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -40,17 +41,20 @@ public class YtService
     private readonly ApiClient _apiClient;
     private readonly ILogger<YtService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly YoutubeSeoService _youtubeSeoService;
 
     public YtService(
         YtProducerDbContext context,
         ApiClient apiClient,
         ILogger<YtService> logger,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        YoutubeSeoService youtubeSeoService)
     {
         _context = context;
         _apiClient = apiClient;
         _logger = logger;
         _scopeFactory = scopeFactory;
+        _youtubeSeoService = youtubeSeoService;
     }
 
     public async Task RunPlaylistInitAsync(string[] commandArgs)
@@ -119,6 +123,7 @@ public class YtService
         while (true)
         {
             _context.ChangeTracker.Clear();
+            await RecoverExpiredConsoleJobLeasesAsync();
 
             var pendingJobIds = await _context.Jobs
                 .AsNoTracking()
@@ -162,6 +167,7 @@ public class YtService
     private async Task<bool> ProcessJobInternalAsync(Job job)
     {
         var workerId = $"console-{Environment.MachineName}-{Environment.ProcessId}";
+        var leaseDuration = TimeSpan.FromMinutes(10);
 
         if (job.Status is JobStatus.Completed or JobStatus.Running)
         {
@@ -173,13 +179,54 @@ public class YtService
         job.WorkerId = workerId;
         job.StartedAt ??= DateTimeOffset.UtcNow;
         job.LastHeartbeat = DateTimeOffset.UtcNow;
-        job.LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10);
+        job.LeaseExpiresAt = DateTimeOffset.UtcNow.Add(leaseDuration);
         job.ErrorCode = null;
         job.ErrorMessage = null;
         job.Progress = 0;
         await _context.SaveChangesAsync();
 
         await AppendJobLogAsync(job.Id, "Info", $"Job started type={job.Type} worker={workerId}");
+
+        using var heartbeatCts = new CancellationTokenSource();
+        var heartbeatTask = Task.Run(async () =>
+        {
+            while (!heartbeatCts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), heartbeatCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                try
+                {
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var scopedContext = scope.ServiceProvider.GetRequiredService<YtProducerDbContext>();
+                    var affected = await scopedContext.Jobs
+                        .Where(x => x.Id == job.Id && x.Status == JobStatus.Running && x.WorkerId == workerId)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(x => x.LastHeartbeat, DateTimeOffset.UtcNow)
+                            .SetProperty(x => x.LeaseExpiresAt, DateTimeOffset.UtcNow.Add(leaseDuration))
+                            .SetProperty(x => x.Progress, job.Progress), heartbeatCts.Token);
+
+                    if (affected == 0)
+                    {
+                        break;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    global::System.Console.WriteLine($"job heartbeat failed id={job.Id} error={ex.Message}");
+                }
+            }
+        }, heartbeatCts.Token);
 
         try
         {
@@ -211,6 +258,45 @@ public class YtService
             global::System.Console.WriteLine($"process-job failed id={job.Id} error={ex.Message}");
             return false;
         }
+        finally
+        {
+            heartbeatCts.Cancel();
+            try
+            {
+                await heartbeatTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    private async Task RecoverExpiredConsoleJobLeasesAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var recoverableJobs = await _context.Jobs
+            .Where(x => x.Status == JobStatus.Running && x.LeaseExpiresAt != null && x.LeaseExpiresAt < now)
+            .ToListAsync();
+
+        if (recoverableJobs.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var stuckJob in recoverableJobs)
+        {
+            stuckJob.RetryCount += 1;
+            stuckJob.WorkerId = null;
+            stuckJob.StartedAt = null;
+            stuckJob.LastHeartbeat = now;
+            stuckJob.LeaseExpiresAt = null;
+            stuckJob.ErrorCode = "LeaseExpired";
+            stuckJob.ErrorMessage = "Job lease expired before completion";
+            stuckJob.Status = stuckJob.RetryCount < stuckJob.MaxRetries ? JobStatus.Pending : JobStatus.Failed;
+        }
+
+        await _context.SaveChangesAsync();
+        global::System.Console.WriteLine($"recovered expired console jobs count={recoverableJobs.Count}");
     }
 
     public async Task PrintPlaylistListAsync(string[] commandArgs)
@@ -774,8 +860,7 @@ public class YtService
             loop,
             outputVideoPath,
             loopThumbnailPath,
-            loopYoutubeMetadata.Title,
-            loopYoutubeMetadata.Description);
+            loopYoutubeMetadata);
         if (!youtubeUpload.Success)
         {
             throw new InvalidOperationException(youtubeUpload.ErrorMessage ?? "Loop YouTube upload failed.");
@@ -801,7 +886,13 @@ public class YtService
             loopThumbnailPath,
             youtubeVideoId = youtubeUpload.VideoId,
             youtubeUrl = youtubeUpload.Url,
+            tags = loopYoutubeMetadata.Tags,
             hashtags = loopYoutubeMetadata.Hashtags,
+            chapters = loopYoutubeMetadata.Chapters,
+            categoryId = loopYoutubeMetadata.CategoryId,
+            defaultLanguage = loopYoutubeMetadata.DefaultLanguage,
+            defaultAudioLanguage = loopYoutubeMetadata.DefaultAudioLanguage,
+            madeForKids = loopYoutubeMetadata.MadeForKids,
             loopRoot
         });
         await _context.SaveChangesAsync();
@@ -1067,43 +1158,17 @@ public class YtService
         return response.OutputPath;
     }
 
-    private async Task<LoopYoutubeMetadata> BuildLoopYoutubeMetadataAsync(Track track, Playlist playlist, TrackLoop loop, string outputVideoPath)
+    private async Task<YoutubeUploadMetadata> BuildLoopYoutubeMetadataAsync(Track track, Playlist playlist, TrackLoop loop, string outputVideoPath)
     {
         var durationSeconds = await ProbeMediaDurationSecondsAsync(outputVideoPath)
             ?? await ProbeMediaDurationSecondsAsync(loop.SourceVideoPath)
             ?? ParseTrackDurationSeconds(track.Duration)
             ?? 0d;
-        var durationMinutes = Math.Max(1, (int)Math.Ceiling(durationSeconds / 60d));
-
-        var hookType = TryGetMetadataString(track.Metadata, "hookType");
-        var listeningScenario = FirstNonEmpty(
-            TryGetMetadataString(track.Metadata, "listeningScenario"),
-            TryGetMetadataString(track.Metadata, "playlistCategory"),
-            TryGetMetadataString(playlist.Metadata, "playlistCategory"),
-            "gym workouts");
-        var targetAudience = FirstNonEmpty(
-            TryGetMetadataString(track.Metadata, "targetAudience"),
-            "workout listeners");
-        var style = FirstNonEmpty(track.Style, TryExtractFieldFromPrompt(TryGetMetadataString(track.Metadata, "musicGenerationPrompt"), "Subgenre"), "Workout");
-        var genre = FirstNonEmpty(
-            TryExtractFieldFromPrompt(TryGetMetadataString(track.Metadata, "musicGenerationPrompt"), "Subgenre"),
-            TryExtractFieldFromPrompt(TryGetMetadataString(track.Metadata, "musicGenerationPrompt"), "Genre"),
-            style,
-            "Workout");
-        var bpm = track.TempoBpm;
-        var title = BuildLoopYoutubeTitle(hookType, bpm, genre, durationMinutes);
-        var hashtags = BuildLoopHashtags(track, playlist, genre);
-        var description = BuildLoopYoutubeDescription(
+        return _youtubeSeoService.BuildLoopUploadMetadata(
             track,
             playlist,
-            hookType,
-            genre,
-            listeningScenario,
-            targetAudience,
-            durationMinutes,
-            hashtags);
-
-        return new LoopYoutubeMetadata(title, description, hashtags, durationMinutes);
+            durationSeconds,
+            playlist.YoutubePlaylistId);
     }
 
     private async Task<YoutubeUploadVideoResult> UploadLoopToYoutubeAsync(
@@ -1111,8 +1176,7 @@ public class YtService
         TrackLoop loop,
         string videoPath,
         string? thumbnailPath,
-        string title,
-        string description)
+        YoutubeUploadMetadata uploadMetadata)
     {
         var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY");
         if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
@@ -1147,8 +1211,7 @@ public class YtService
             mcpProject,
             allowedRoot,
             videoPath,
-            title,
-            description,
+            uploadMetadata,
             scheduledPrivacy,
             publishAt);
 
@@ -1222,133 +1285,6 @@ public class YtService
         }
 
         return result;
-    }
-
-    private static string BuildLoopYoutubeTitle(string? hookType, int? tempoBpm, string? style, int durationMinutes)
-    {
-        var styleToken = string.IsNullOrWhiteSpace(style) ? "Workout" : style.Trim();
-        var bpmToken = tempoBpm.HasValue ? $"{tempoBpm.Value} BPM " : string.Empty;
-        var hookToken = string.IsNullOrWhiteSpace(hookType) ? string.Empty : $"{NormalizeHeadline(hookType)} ⚡ ";
-        var title = $"{hookToken}{bpmToken}{styleToken} Workout Music | Gym Focus & Motivation | {durationMinutes} Min Loop".Trim();
-
-        if (title.Length <= 90)
-        {
-            return title;
-        }
-
-        var shorter = $"{hookToken}{bpmToken}{styleToken} Workout | {durationMinutes} Min Loop".Trim();
-        if (shorter.Length <= 90)
-        {
-            return shorter;
-        }
-
-        return shorter.Length <= 90 ? shorter : shorter[..90].TrimEnd();
-    }
-
-    private static string BuildLoopYoutubeDescription(
-        Track track,
-        Playlist playlist,
-        string? hookType,
-        string genre,
-        string listeningScenario,
-        string targetAudience,
-        int durationMinutes,
-        IReadOnlyList<string> hashtags)
-    {
-        var bpmToken = track.TempoBpm.HasValue ? $"{track.TempoBpm.Value} BPM" : "steady BPM";
-        var keyToken = string.IsNullOrWhiteSpace(track.Key) ? "n/a" : track.Key.Trim();
-        var energyToken = track.EnergyLevel.HasValue ? $"{track.EnergyLevel.Value}/10" : "n/a";
-        var brandName = Environment.GetEnvironmentVariable("YT_PRODUCER_BRAND_NAME")?.Trim();
-        if (string.IsNullOrWhiteSpace(brandName))
-        {
-            brandName = "AuruZ Music";
-        }
-
-        var subscribeLink = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_SUBSCRIBE_LINK")?.Trim();
-        if (string.IsNullOrWhiteSpace(subscribeLink))
-        {
-            subscribeLink = "[Link]";
-        }
-
-        var lines = new List<string>
-        {
-            $"{genre} workout music loop for gym focus, cardio training and motivation from {brandName}.",
-            $"This {durationMinutes} minute loop keeps your {bpmToken} rhythm locked in for {listeningScenario}.",
-            string.Empty,
-            "Benefits:",
-            $"- Great for {listeningScenario}",
-            "- Helps maintain focus and workout consistency",
-            $"- Built for {targetAudience}",
-            string.Empty,
-            "Track Info:",
-            $"- Title: {track.Title}",
-            $"- Genre: {genre}",
-            $"- BPM: {bpmToken}",
-            $"- Key: {keyToken}",
-            $"- Energy: {energyToken}",
-            $"{(string.IsNullOrWhiteSpace(hookType) ? string.Empty : $"- Hook: {hookType.Trim()}")}".Trim(),
-            string.Empty,
-            $"Loop Info: This is a continuous {durationMinutes} minute loop version for longer workouts, treadmill sessions and repeat training blocks.",
-            string.Empty,
-            $"Playlist Context: {playlist.Title}{(string.IsNullOrWhiteSpace(playlist.Description) ? string.Empty : $" - {playlist.Description!.Trim()}")}",
-            string.Empty,
-            $"Subscribe for more gym loops and workout motivation: {subscribeLink}"
-        };
-
-        if (hashtags.Count > 0)
-        {
-            lines.Add(string.Empty);
-            lines.Add(string.Join(" ", hashtags));
-        }
-
-        return string.Join(Environment.NewLine, lines.Where(x => !string.IsNullOrWhiteSpace(x) || x == string.Empty)).Trim();
-    }
-
-    private static IReadOnlyList<string> BuildLoopHashtags(Track track, Playlist playlist, string genre)
-    {
-        var tags = TryGetMetadataStringArray(track.Metadata, "youtubeTags");
-        if (tags.Count == 0)
-        {
-            tags = TryGetMetadataStringArray(playlist.Metadata, "youtubeTags");
-        }
-
-        var normalized = tags
-            .Select(NormalizeHashtag)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(6)
-            .ToList();
-
-        if (normalized.Count == 0)
-        {
-            normalized.AddRange(new[]
-            {
-                "#AuruZ",
-                "#GymMusic",
-                NormalizeHashtag(genre),
-                "#WorkoutMotivation",
-                "#FocusMusic",
-                "#Loop"
-            }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase));
-        }
-
-        return normalized.Take(8).ToList();
-    }
-
-    private static string? NormalizeHashtag(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        var compact = Regex.Replace(value, @"[^a-zA-Z0-9]+", string.Empty);
-        if (string.IsNullOrWhiteSpace(compact))
-        {
-            return null;
-        }
-
-        return $"#{compact}";
     }
 
     private static async Task<double?> ProbeMediaDurationSecondsAsync(string? mediaPath)
@@ -4862,8 +4798,13 @@ public class YtService
             return false;
         }
 
-        var title = track.YouTubeTitle ?? track.Title;
-        var description = ResolveYoutubeDescription(track, playlist);
+        var durationSeconds = await ProbeMediaDurationSecondsAsync(videoPath)
+            ?? ParseTrackDurationSeconds(track.Duration);
+        var uploadMetadata = _youtubeSeoService.BuildTrackUploadMetadata(
+            track,
+            playlist,
+            durationSeconds,
+            playlist.YoutubePlaylistId);
         var publishState = await GetOrCreateYoutubeLastPublishedDateAsync();
         var publishAt = publishAtOverride ?? GetNextYoutubePublishSlotUtc(publishState.LastPublishedDate);
         var scheduledPrivacy = "private";
@@ -4873,8 +4814,7 @@ public class YtService
             mcpProject,
             allowedRoot,
             videoPath,
-            title,
-            description,
+            uploadMetadata,
             scheduledPrivacy,
             publishAt);
 
@@ -4892,12 +4832,21 @@ public class YtService
             PlaylistPosition = position,
             VideoId = result.VideoId,
             Url = result.Url,
-            Title = title,
-            Description = description,
+            Title = uploadMetadata.Title,
+            Description = uploadMetadata.Description,
             Privacy = scheduledPrivacy,
             FilePath = videoPath,
             Status = "uploaded",
-            Metadata = null,
+            Metadata = JsonSerializer.Serialize(new
+            {
+                tags = uploadMetadata.Tags,
+                hashtags = uploadMetadata.Hashtags,
+                chapters = uploadMetadata.Chapters,
+                categoryId = uploadMetadata.CategoryId,
+                defaultLanguage = uploadMetadata.DefaultLanguage,
+                defaultAudioLanguage = uploadMetadata.DefaultAudioLanguage,
+                madeForKids = uploadMetadata.MadeForKids
+            }),
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
@@ -4908,6 +4857,38 @@ public class YtService
         }
         _context.Add(record);
         await _context.SaveChangesAsync();
+
+        var youtubePlaylistId = await TryResolveYoutubePlaylistIdAsync(playlist);
+        if (!string.IsNullOrWhiteSpace(youtubePlaylistId))
+        {
+            var addResult = await ExecuteYoutubeAddVideosToPlaylistAsync(
+                mcpWorkingDirectory,
+                mcpProject,
+                youtubePlaylistId,
+                [result.VideoId]);
+
+            if (addResult.Success)
+            {
+                record.Metadata = JsonSerializer.Serialize(new
+                {
+                    tags = uploadMetadata.Tags,
+                    hashtags = uploadMetadata.Hashtags,
+                    chapters = uploadMetadata.Chapters,
+                    categoryId = uploadMetadata.CategoryId,
+                    defaultLanguage = uploadMetadata.DefaultLanguage,
+                    defaultAudioLanguage = uploadMetadata.DefaultAudioLanguage,
+                    madeForKids = uploadMetadata.MadeForKids,
+                    youtubePlaylistId,
+                    addedToPlaylist = true
+                });
+                _context.TrackOnYoutube.Update(record);
+                await _context.SaveChangesAsync();
+            }
+            else
+            {
+                global::System.Console.WriteLine($"youtube.add_videos_to_playlist failed after upload: {addResult.ErrorMessage}");
+            }
+        }
 
         global::System.Console.WriteLine($"youtube upload complete: {result.VideoId} scheduled_at_utc={publishAt:yyyy-MM-ddTHH:mm:ssZ}");
         return true;
@@ -5040,6 +5021,7 @@ public class YtService
             .ToListAsync();
 
         var videoIds = trackVideos
+            .Where(x => TryGetMetadataBool(x.Metadata, "addedToPlaylist") != true)
             .Select(x => x.VideoId?.Trim())
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.Ordinal)
@@ -5048,7 +5030,7 @@ public class YtService
 
         if (videoIds.Count == 0)
         {
-            global::System.Console.WriteLine("No uploaded videos found in track_on_youtube for this playlist.");
+            global::System.Console.WriteLine("No pending uploaded videos found in track_on_youtube for this playlist.");
             return;
         }
 
@@ -6041,11 +6023,38 @@ public class YtService
 
     private static string BuildYoutubeUploadVideoRequestJson(
         string filePath,
-        string title,
-        string? description,
+        YoutubeUploadMetadata uploadMetadata,
         string privacy,
         DateTimeOffset? publishAt)
     {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["file_path"] = filePath,
+            ["title"] = uploadMetadata.Title,
+            ["description"] = uploadMetadata.Description,
+            ["privacy"] = privacy,
+            ["publish_at"] = publishAt?.ToUniversalTime().ToString("O")
+        };
+
+        if (uploadMetadata.Tags.Count > 0)
+        {
+            arguments["tags"] = uploadMetadata.Tags;
+        }
+
+        if (uploadMetadata.CategoryId.HasValue)
+        {
+            arguments["category_id"] = uploadMetadata.CategoryId.Value.ToString(CultureInfo.InvariantCulture);
+        }
+
+        arguments["made_for_kids"] = uploadMetadata.MadeForKids;
+        var includeLanguageFields = ParseNullableBool(
+            Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_INCLUDE_LANGUAGE_FIELDS")) == true;
+        if (includeLanguageFields)
+        {
+            arguments["default_language"] = uploadMetadata.DefaultLanguage;
+            arguments["default_audio_language"] = uploadMetadata.DefaultAudioLanguage;
+        }
+
         var payload = new
         {
             jsonrpc = "2.0",
@@ -6054,14 +6063,7 @@ public class YtService
             @params = new
             {
                 name = "youtube.upload_video",
-                arguments = new
-                {
-                    file_path = filePath,
-                    title,
-                    description,
-                    privacy,
-                    publish_at = publishAt?.ToUniversalTime().ToString("O")
-                }
+                arguments
             }
         };
 
@@ -6073,14 +6075,13 @@ public class YtService
         string mcpProject,
         string? allowedRoot,
         string filePath,
-        string title,
-        string? description,
+        YoutubeUploadMetadata uploadMetadata,
         string privacy,
         DateTimeOffset? publishAt)
     {
         try
         {
-            var requestJson = BuildYoutubeUploadVideoRequestJson(filePath, title, description, privacy, publishAt);
+            var requestJson = BuildYoutubeUploadVideoRequestJson(filePath, uploadMetadata, privacy, publishAt);
             var startInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
@@ -6274,6 +6275,29 @@ public class YtService
         return null;
     }
 
+    private static bool? TryGetBoolProperty(JsonElement root, string propertyName)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (property.Value.ValueKind == JsonValueKind.True || property.Value.ValueKind == JsonValueKind.False)
+            {
+                return property.Value.GetBoolean();
+            }
+        }
+
+        return null;
+    }
+
     private async Task UpsertYoutubePlaylistRecordAsync(
         Playlist playlist,
         string youtubePlaylistId,
@@ -6302,6 +6326,20 @@ public class YtService
         existing.LastSyncedAtUtc = lookup != null ? DateTimeOffset.UtcNow : existing.LastSyncedAtUtc;
         existing.UpdatedAtUtc = DateTimeOffset.UtcNow;
         existing.CreatedAtUtc = existing.CreatedAtUtc == default ? DateTimeOffset.UtcNow : existing.CreatedAtUtc;
+    }
+
+    private async Task<string?> TryResolveYoutubePlaylistIdAsync(Playlist playlist)
+    {
+        if (!string.IsNullOrWhiteSpace(playlist.YoutubePlaylistId))
+        {
+            return playlist.YoutubePlaylistId;
+        }
+
+        var youtubePlaylistRecord = await _context.YoutubePlaylists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.PlaylistId == playlist.Id);
+
+        return youtubePlaylistRecord?.YoutubePlaylistId;
     }
 
     private static string BuildYoutubeUploadThumbnailRequestJson(string videoId, string imagePath)
@@ -7310,118 +7348,6 @@ public class YtService
         return null;
     }
 
-    private static string? ResolveYoutubeDescription(Track track, Playlist playlist)
-    {
-        var trackMetadata = track.Metadata;
-        var playlistMetadata = playlist.Metadata;
-        var fallbackDescription = playlist.Description;
-
-        var metadataDescription = TryGetMetadataString(trackMetadata, "youtubeDescription")
-            ?? TryGetMetadataString(playlistMetadata, "youtubeDescription");
-
-        var scenario = FirstNonEmpty(
-            TryGetMetadataString(trackMetadata, "listeningScenario"),
-            TryGetMetadataString(trackMetadata, "playlistCategory"),
-            TryGetMetadataString(playlistMetadata, "playlistCategory"),
-            "workout");
-        var hookType = TryGetMetadataString(trackMetadata, "hookType");
-        var energyCurve = TryGetMetadataString(trackMetadata, "energyCurve");
-        var musicPrompt = TryGetMetadataString(trackMetadata, "musicGenerationPrompt")
-            ?? TryGetMetadataString(playlistMetadata, "musicGenerationPrompt");
-        var genre = TryExtractFieldFromPrompt(musicPrompt, "Genre");
-        var subgenre = TryExtractFieldFromPrompt(musicPrompt, "Subgenre");
-        var bpm = track.TempoBpm?.ToString() ?? TryExtractFieldFromPrompt(musicPrompt, "BPM");
-        var musicalKey = track.Key ?? TryExtractFieldFromPrompt(musicPrompt, "Key");
-        var vibe = FirstNonEmpty(
-            track.Style,
-            TryGetMetadataString(trackMetadata, "thumbnailEmotion"),
-            TryGetMetadataString(trackMetadata, "targetAudience"),
-            hookType,
-            energyCurve,
-            "Focused, Steady, Driving");
-
-        var brandName = Environment.GetEnvironmentVariable("YT_PRODUCER_BRAND_NAME")?.Trim();
-        if (string.IsNullOrWhiteSpace(brandName))
-        {
-            brandName = "AuruZ Music";
-        }
-
-        var subscribeLink = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_SUBSCRIBE_LINK")?.Trim();
-        if (string.IsNullOrWhiteSpace(subscribeLink))
-        {
-            subscribeLink = "[Link]";
-        }
-
-        var playlistLink = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_PLAYLIST_LINK")?.Trim();
-        if (string.IsNullOrWhiteSpace(playlistLink))
-        {
-            playlistLink = "[Link]";
-        }
-
-        var effectiveGenre = FirstNonEmpty(subgenre, genre, "Electronic Workout");
-        var details = new List<string>
-        {
-            $"Artist: {brandName}",
-            $"Genre: {effectiveGenre} / Instrumental Gym Music",
-            $"Vibe: {vibe}"
-        };
-
-        if (!string.IsNullOrWhiteSpace(bpm))
-        {
-            details.Add($"Tempo: {bpm.Trim()} BPM");
-        }
-
-        if (!string.IsNullOrWhiteSpace(musicalKey))
-        {
-            details.Add($"Key: {musicalKey.Trim()}");
-        }
-
-        if (track.EnergyLevel.HasValue)
-        {
-            details.Add($"Energy: {track.EnergyLevel.Value}/10");
-        }
-
-        var lines = new List<string>
-        {
-            $"Elevate your {scenario.Trim()} ritual with {brandName}. ⚡",
-            string.Empty,
-            $"This {effectiveGenre} track is built to lock your focus and move you into a high-performance state.",
-            $"Whether you're preparing for heavy lifting or cardio, this rhythm helps keep you in the zone."
-        };
-
-        if (!string.IsNullOrWhiteSpace(metadataDescription))
-        {
-            lines.Add(string.Empty);
-            lines.Add(metadataDescription.Trim());
-        }
-
-        lines.Add(string.Empty);
-        lines.Add("🎵 Track Details:");
-        lines.Add(string.Empty);
-        lines.AddRange(details);
-        lines.Add(string.Empty);
-        lines.Add($"👇 Support {brandName}:");
-        lines.Add(string.Empty);
-        lines.Add($"Subscribe for weekly gym fuel: {subscribeLink}");
-        lines.Add($"Save this playlist: {playlistLink}");
-
-        var tags = TryGetMetadataStringArray(trackMetadata, "youtubeTags");
-        if (tags.Count == 0)
-        {
-            tags = TryGetMetadataStringArray(playlistMetadata, "youtubeTags");
-        }
-
-        var hashTagLine = BuildHashtagLine(tags);
-        if (!string.IsNullOrWhiteSpace(hashTagLine))
-        {
-            lines.Add(string.Empty);
-            lines.Add(hashTagLine);
-        }
-
-        var description = string.Join(Environment.NewLine, lines).Trim();
-        return string.IsNullOrWhiteSpace(description) ? fallbackDescription : description;
-    }
-
     private static string? TryGetMetadataString(string? metadata, string propertyName)
     {
         if (string.IsNullOrWhiteSpace(metadata))
@@ -7440,81 +7366,27 @@ public class YtService
         }
     }
 
-    private static IReadOnlyList<string> TryGetMetadataStringArray(string? metadata, string propertyName)
+    private static bool? TryGetMetadataBool(string? metadata, string propertyName)
     {
         if (string.IsNullOrWhiteSpace(metadata))
         {
-            return Array.Empty<string>();
+            return null;
         }
 
         try
         {
             using var document = JsonDocument.Parse(metadata);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-            {
-                return Array.Empty<string>();
-            }
-
-            foreach (var property in root.EnumerateObject())
-            {
-                if (!property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (property.Value.ValueKind != JsonValueKind.Array)
-                {
-                    return Array.Empty<string>();
-                }
-
-                var list = new List<string>();
-                foreach (var item in property.Value.EnumerateArray())
-                {
-                    if (item.ValueKind == JsonValueKind.String)
-                    {
-                        var value = item.GetString();
-                        if (!string.IsNullOrWhiteSpace(value))
-                        {
-                            list.Add(value.Trim());
-                        }
-                    }
-                }
-
-                return list;
-            }
-
-            return Array.Empty<string>();
+            return TryGetBoolProperty(document.RootElement, propertyName);
         }
         catch (JsonException)
         {
-            return Array.Empty<string>();
+            return null;
         }
     }
 
-    private static string BuildHashtagLine(IReadOnlyList<string> tags)
+    private static bool? ParseNullableBool(string? value)
     {
-        if (tags.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        var tagSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tag in tags)
-        {
-            var normalized = NormalizeTag(tag);
-            if (!string.IsNullOrWhiteSpace(normalized))
-            {
-                tagSet.Add(normalized);
-            }
-        }
-
-        if (tagSet.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        return string.Join(" ", tagSet.Take(12).Select(tag => $"#{tag}"));
+        return bool.TryParse(value?.Trim(), out var parsed) ? parsed : null;
     }
 
     private static string FirstNonEmpty(params string?[] values)
@@ -7528,17 +7400,6 @@ public class YtService
         }
 
         return string.Empty;
-    }
-
-    private static string NormalizeTag(string tag)
-    {
-        var trimmed = tag.Trim();
-        if (trimmed.StartsWith("#"))
-        {
-            trimmed = trimmed[1..];
-        }
-
-        return string.IsNullOrWhiteSpace(trimmed) ? string.Empty : trimmed.Replace(" ", string.Empty);
     }
 
     private void WriteImagePromptFile(
@@ -7774,12 +7635,6 @@ public class YtService
     }
 
     private sealed record LoopConcatResult(bool Success, string CommandLine, string? ErrorMessage);
-
-    private sealed record LoopYoutubeMetadata(
-        string Title,
-        string Description,
-        IReadOnlyList<string> Hashtags,
-        int DurationMinutes);
 
     private sealed record PromptMetadata(string? ImagePrompt, string? SunoPrompt);
 
