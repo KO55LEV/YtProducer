@@ -164,6 +164,12 @@ public static class PlaylistEndpoints
         IPlaylistRepository repository,
         CancellationToken cancellationToken)
     {
+        var validationError = ValidateCreatePlaylistRequest(request);
+        if (validationError != null)
+        {
+            return Results.BadRequest(new { message = validationError });
+        }
+
         var playlist = new Playlist
         {
             Title = request.Title,
@@ -192,6 +198,48 @@ public static class PlaylistEndpoints
 
         var response = MapToPlaylistResponse(created);
         return Results.Created($"/playlists/{response.Id}", response);
+    }
+
+    private static string? ValidateCreatePlaylistRequest(CreatePlaylistRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            return "Playlist title is required.";
+        }
+
+        if (request.Tracks == null || request.Tracks.Length == 0)
+        {
+            return "Playlist must contain at least one track.";
+        }
+
+        var seenPositions = new HashSet<int>();
+
+        for (var index = 0; index < request.Tracks.Length; index++)
+        {
+            var track = request.Tracks[index];
+
+            if (track.PlaylistPosition <= 0)
+            {
+                return $"Track {index + 1} has an invalid playlist position.";
+            }
+
+            if (!seenPositions.Add(track.PlaylistPosition))
+            {
+                return $"Duplicate playlist position {track.PlaylistPosition} detected.";
+            }
+
+            if (string.IsNullOrWhiteSpace(track.Title))
+            {
+                return $"Track {track.PlaylistPosition} title is required.";
+            }
+
+            if (string.IsNullOrWhiteSpace(track.Metadata))
+            {
+                return $"Track {track.PlaylistPosition} metadata is required.";
+            }
+        }
+
+        return null;
     }
 
     private static async Task<IResult> GetPlaylistsAsync(

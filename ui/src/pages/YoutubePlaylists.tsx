@@ -36,6 +36,19 @@ const emptyForm: FormState = {
   metadata: ""
 };
 
+function privacyBadgeClassName(value: string): string {
+  switch (value.toLowerCase()) {
+    case "public":
+      return "badge badge-public";
+    case "private":
+      return "badge badge-private";
+    case "unlisted":
+      return "badge badge-unlisted";
+    default:
+      return "badge badge-secondary";
+  }
+}
+
 function toNullableString(value: string): string | null {
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;
@@ -330,7 +343,7 @@ export default function YoutubePlaylists() {
                       <p className="muted">{playlist.youtubePlaylistId}</p>
                     </div>
                     {playlist.privacyStatus && (
-                      <span className="badge badge-secondary">{playlist.privacyStatus}</span>
+                      <span className={privacyBadgeClassName(playlist.privacyStatus)}>{playlist.privacyStatus}</span>
                     )}
                   </div>
                   <p className="youtube-card-description">

@@ -19,6 +19,135 @@ function pickPlaylistPreviewImages(media: PlaylistMediaResponse): string[] {
     .slice(0, 4);
 }
 
+function deriveTrackTitle(track: Record<string, unknown>, fallbackPosition: number): string | null {
+  const directTitle = typeof track.title === "string" ? track.title.trim() : "";
+  if (directTitle) {
+    return directTitle;
+  }
+
+  const youtubeTitle = typeof track.youtube_title === "string" ? track.youtube_title.trim() : "";
+  if (youtubeTitle) {
+    const cleaned = youtubeTitle
+      .split("|")[0]
+      .split("⚡")[0]
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+
+  return `Track ${fallbackPosition}`;
+}
+
+type NormalizedPlaylistUpload = {
+  title: string;
+  theme: string | null;
+  description: string | null;
+  playlistStrategy: string | null;
+  metadata: string;
+  tracks: Array<{
+    playlistPosition: number;
+    title: string;
+    youTubeTitle: string | null;
+    style: string | null;
+    duration: string | null;
+    tempoBpm: number | null;
+    key: string | null;
+    energyLevel: number | null;
+    metadata: string;
+  }>;
+};
+
+function readText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizePlaylistUpload(json: Record<string, unknown>): NormalizedPlaylistUpload {
+  const sourceTracks = Array.isArray(json.tracks) ? json.tracks : [];
+  if (sourceTracks.length === 0) {
+    throw new Error("Playlist JSON must contain a non-empty tracks array.");
+  }
+
+  const normalizedTracks = sourceTracks.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`Track ${index + 1} is not a valid JSON object.`);
+    }
+
+    const track = item as Record<string, unknown>;
+    const playlistPosition =
+      typeof track.playlist_position === "number"
+        ? track.playlist_position
+        : typeof track.track_number === "number"
+          ? track.track_number
+          : index + 1;
+
+    const title = deriveTrackTitle(track, playlistPosition);
+    const youTubeTitle = readText(track.youtube_title);
+    const musicGenerationPrompt = readText(track.music_generation_prompt);
+    const imagePrompt = readText(track.image_prompt) ?? readText(track.thumbnail_image_prompt);
+
+    if (!title) {
+      throw new Error(`Track ${playlistPosition} is missing title data.`);
+    }
+
+    if (!musicGenerationPrompt) {
+      throw new Error(`Track ${playlistPosition} is missing music_generation_prompt.`);
+    }
+
+    if (!imagePrompt) {
+      throw new Error(`Track ${playlistPosition} is missing image_prompt or thumbnail_image_prompt.`);
+    }
+
+    return {
+      playlistPosition,
+      title,
+      youTubeTitle,
+      style: readText(track.style_summary) ?? readText(track.style),
+      duration:
+        track.duration_seconds != null
+          ? String(track.duration_seconds)
+          : readText(track.duration),
+      tempoBpm: typeof track.tempo_bpm === "number" ? track.tempo_bpm : null,
+      key: readText(track.key),
+      energyLevel: typeof track.energy_level === "number" ? track.energy_level : null,
+      metadata: JSON.stringify({
+        titleViralityScore: track.title_virality_score,
+        hookStrengthScore: track.hook_strength_score,
+        thumbnailCtrScore: track.thumbnail_ctr_score,
+        hookType: track.hook_type,
+        songStructure: track.song_structure,
+        energyCurve: track.energy_curve,
+        listeningScenario: track.listening_scenario,
+        targetAudience: track.target_audience,
+        thumbnailEmotion: track.thumbnail_emotion,
+        thumbnailColorPalette: track.thumbnail_color_palette,
+        thumbnailTextHint: track.thumbnail_text_hint,
+        playlistCategory: track.playlist_category,
+        instruments: track.instruments,
+        visualStyleHint: track.visual_style_hint,
+        lyrics: track.lyrics,
+        musicGenerationPrompt,
+        imagePrompt,
+        youtubeDescription: track.youtube_description,
+        youtubeTags: track.youtube_tags
+      })
+    };
+  });
+
+  return {
+    title: readText(json.playlist_title) ?? readText(json.theme) ?? "Untitled Playlist",
+    theme: readText(json.theme),
+    description: readText(json.playlist_description) ?? readText(json.playlist_strategy),
+    playlistStrategy: readText(json.playlist_strategy),
+    metadata: JSON.stringify({
+      targetPlatform: readText(json.target_platform)
+    }),
+    tracks: normalizedTracks
+  };
+}
+
 function statusClassName(status: string): string {
   switch (status.toLowerCase()) {
     case "completed":
@@ -105,49 +234,8 @@ export default function ListManager() {
       setError(null);
 
       const text = await file.text();
-      const json = JSON.parse(text);
-
-      // Map JSON structure to API contract
-      const payload = {
-        title: json.playlist_title || json.theme || "Untitled Playlist",
-        theme: json.theme,
-        description: json.playlist_description ?? json.playlist_strategy ?? null,
-        playlistStrategy: json.playlist_strategy,
-        metadata: JSON.stringify({
-          targetPlatform: json.target_platform
-        }),
-        tracks: json.tracks?.map((track: any) => ({
-          playlistPosition: track.playlist_position,
-          title: track.title,
-          youTubeTitle: track.youtube_title,
-          style: track.style_summary ?? track.style,
-          duration: track.duration_seconds != null ? String(track.duration_seconds) : track.duration,
-          tempoBpm: track.tempo_bpm,
-          key: track.key,
-          energyLevel: track.energy_level,
-          metadata: JSON.stringify({
-            titleViralityScore: track.title_virality_score,
-            hookStrengthScore: track.hook_strength_score,
-            thumbnailCtrScore: track.thumbnail_ctr_score,
-            hookType: track.hook_type,
-            songStructure: track.song_structure,
-            energyCurve: track.energy_curve,
-            listeningScenario: track.listening_scenario,
-            targetAudience: track.target_audience,
-            thumbnailEmotion: track.thumbnail_emotion,
-            thumbnailColorPalette: track.thumbnail_color_palette,
-            thumbnailTextHint: track.thumbnail_text_hint,
-            playlistCategory: track.playlist_category,
-            instruments: track.instruments,
-            visualStyleHint: track.visual_style_hint,
-            lyrics: track.lyrics,
-            musicGenerationPrompt: track.music_generation_prompt,
-            imagePrompt: track.image_prompt,
-            youtubeDescription: track.youtube_description,
-            youtubeTags: track.youtube_tags
-          })
-        }))
-      };
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const payload = normalizePlaylistUpload(parsed);
 
       const response = await fetch(`${apiBaseUrl}/playlists`, {
         method: "POST",
@@ -156,7 +244,18 @@ export default function ListManager() {
       });
 
       if (!response.ok) {
-        throw new Error(`Upload failed with status ${response.status}`);
+        let message = `Upload failed with status ${response.status}`;
+
+        try {
+          const data = (await response.json()) as { message?: string };
+          if (typeof data.message === "string" && data.message.trim()) {
+            message = data.message;
+          }
+        } catch {
+          // Ignore non-JSON error bodies.
+        }
+
+        throw new Error(message);
       }
 
       await fetchPlaylists();
@@ -197,11 +296,11 @@ export default function ListManager() {
           <h1 className="page-title">Playlist Manager</h1>
           <p className="page-subtitle">Manage and orchestrate your YouTube playlist production</p>
         </div>
-        <div className="upload-section">
-          <Link to="/youtube-playlists" className="btn btn-secondary">
+        <div className="upload-section playlist-manager-actions">
+          <Link to="/youtube-playlists" className="btn btn-secondary playlist-manager-btn playlist-manager-btn-secondary">
             YouTube Playlists
           </Link>
-          <label htmlFor="file-upload" className="btn btn-primary">
+          <label htmlFor="file-upload" className="btn btn-primary playlist-manager-btn playlist-manager-btn-primary">
             {uploading ? "Uploading..." : "Upload JSON"}
           </label>
           <input
@@ -248,66 +347,68 @@ export default function ListManager() {
                 }
               }}
             >
-              <div className="playlist-card-media">
-                {previewImagesByPlaylistId[playlist.id]?.length ? (
-                  <div
-                    className={`playlist-card-collage playlist-card-collage-count-${previewImagesByPlaylistId[playlist.id].length}`}
-                  >
-                    {previewImagesByPlaylistId[playlist.id].map((imageUrl, index) => (
+              <div className="playlist-card-top">
+                <div className="playlist-card-header">
+                  <h3 className="playlist-title">{playlist.title}</h3>
+                </div>
+                <div className="playlist-card-side">
+                  <span className={statusClassName(playlist.status)}>{playlist.status}</span>
+                  {previewImagesByPlaylistId[playlist.id]?.length ? (
+                    <div className="playlist-card-media">
                       <div
-                        key={`${playlist.id}-${index}`}
-                        className={`playlist-card-collage-tile playlist-card-collage-tile-${index + 1}`}
+                        className={`playlist-card-collage playlist-card-collage-count-${previewImagesByPlaylistId[playlist.id].length}`}
                       >
-                        <img src={imageUrl} alt="" loading="lazy" />
+                        {previewImagesByPlaylistId[playlist.id].map((imageUrl, index) => (
+                          <div
+                            key={`${playlist.id}-${index}`}
+                            className={`playlist-card-collage-tile playlist-card-collage-tile-${index + 1}`}
+                          >
+                            <img src={imageUrl} alt="" loading="lazy" />
+                          </div>
+                        ))}
+                        <div className="playlist-card-collage-overlay" />
                       </div>
-                    ))}
-                    <div className="playlist-card-collage-overlay" />
-                  </div>
-                ) : (
-                  <div className="playlist-card-collage playlist-card-collage-empty">
-                    <div className="playlist-card-collage-overlay" />
-                    <span className="playlist-card-collage-label">Playlist Visual Mix</span>
-                  </div>
-                )}
-              </div>
-              <div className="playlist-card-header">
-                <h3 className="playlist-title">{playlist.title}</h3>
-                <span className={statusClassName(playlist.status)}>{playlist.status}</span>
+                    </div>
+                  ) : null}
+                </div>
               </div>
               {playlist.theme && (
-                <div className="playlist-theme">🎵 {playlist.theme}</div>
+                <div className="playlist-theme">
+                  <span className="playlist-theme-icon" aria-hidden="true">🎵</span>
+                  <span>{playlist.theme}</span>
+                </div>
               )}
               <p className="playlist-description">
                 {playlist.description ?? "No description"}
               </p>
-                <div className="playlist-footer">
-                  <span className="track-count">
-                    <strong>{playlist.trackCount}</strong> tracks
+              <div className="playlist-footer">
+                <span className="track-count">
+                  <strong>{playlist.trackCount}</strong> tracks
+                </span>
+                <div className="playlist-footer-actions">
+                  {playlist.status.toLowerCase() === "draft" && (
+                    <>
+                      {startJobIdByPlaylistId[playlist.id] && (
+                        <span className="playlist-start-scheduled">Scheduled</span>
+                      )}
+                      <button
+                        type="button"
+                        className="playlist-start-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleStart(playlist.id);
+                        }}
+                        disabled={startingByPlaylistId[playlist.id] === true}
+                      >
+                        {startingByPlaylistId[playlist.id] === true ? "Starting..." : "Start"}
+                      </button>
+                    </>
+                  )}
+                  <span className="playlist-date">
+                    {new Date(playlist.createdAtUtc).toLocaleDateString()}
                   </span>
-                  <div className="playlist-footer-actions">
-                    {playlist.status.toLowerCase() === "draft" && (
-                      <>
-                        {startJobIdByPlaylistId[playlist.id] && (
-                          <span className="playlist-start-scheduled">Scheduled</span>
-                        )}
-                        <button
-                          type="button"
-                          className="playlist-start-btn"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleStart(playlist.id);
-                          }}
-                          disabled={startingByPlaylistId[playlist.id] === true}
-                        >
-                          {startingByPlaylistId[playlist.id] === true ? "Starting..." : "Start"}
-                        </button>
-                      </>
-                    )}
-                    <span className="playlist-date">
-                      {new Date(playlist.createdAtUtc).toLocaleDateString()}
-                    </span>
-                  </div>
                 </div>
+              </div>
             </article>
           ))}
         </div>

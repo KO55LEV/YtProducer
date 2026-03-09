@@ -883,13 +883,28 @@ export default function PlaylistDetail() {
               <section className="playlist-actions-column">
                 <div className="playlist-toolbar-title">YouTube</div>
                 <div className="playlist-toolbar">
+                  {playlist.youtubePlaylistId && (
+                    <a
+                      className="playlist-action-btn playlist-action-btn-secondary"
+                      href={`https://www.youtube.com/playlist?list=${playlist.youtubePlaylistId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      Open Playlist
+                    </a>
+                  )}
                   <button
                     type="button"
                     className="playlist-action-btn playlist-action-btn-secondary"
                     onClick={() => void handleGenerateYoutubePlaylist()}
-                    disabled={generateYoutubePlaylistBusy}
+                    disabled={generateYoutubePlaylistBusy || Boolean(playlist.youtubePlaylistId)}
                   >
-                    {generateYoutubePlaylistBusy ? "Scheduling..." : "Create Playlist"}
+                    {playlist.youtubePlaylistId
+                      ? "Playlist Already Created"
+                      : generateYoutubePlaylistBusy
+                        ? "Scheduling..."
+                        : "Create Playlist"}
                   </button>
                   {generateYoutubePlaylistJobId && (
                     <span className="playlist-action-status">Scheduled</span>
