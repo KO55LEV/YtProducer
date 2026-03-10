@@ -45,6 +45,7 @@ app.MapGet("/health", async (CancellationToken cancellationToken) =>
 });
 
 app.MapPlaylistEndpoints();
+app.MapAlbumReleaseEndpoints();
 app.MapJobEndpoints();
 app.MapLoopEndpoints();
 app.MapPromptTemplateEndpoints();

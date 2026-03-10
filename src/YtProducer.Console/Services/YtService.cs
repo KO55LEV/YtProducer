@@ -7,6 +7,7 @@ using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using SkiaSharp;
 using YtProducer.Contracts.Jobs;
 using YtProducer.Contracts.Playlists;
 using YtProducer.Contracts.YoutubePlaylists;
@@ -392,9 +393,148 @@ public class YtService
             "generate-youtube-playlist" => await ProcessGenerateYoutubePlaylistJobAsync(job, payload),
             "upload-youtube-videos" => await ProcessUploadYoutubeVideosJobAsync(job, payload),
             "add-youtube-videos-to-playlist" => await ProcessAddYoutubeVideosToPlaylistJobAsync(job, payload),
+            "delete-album-release-temp-files" => await ProcessDeleteAlbumReleaseTempFilesJobAsync(job, payload),
+            "generate-album-release-assets" => await ProcessGenerateAlbumReleaseAssetsJobAsync(job, payload),
+            "upload-album-release-youtube" => await ProcessUploadAlbumReleaseToYoutubeJobAsync(job, payload),
             "create-track-loop" => await ProcessCreateTrackLoopJobAsync(job, payload),
             _ => throw new InvalidOperationException($"Unsupported scheduled command: {command}")
         };
+    }
+
+    private async Task<string> ProcessDeleteAlbumReleaseTempFilesJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateDeleteAlbumReleaseTempFilesJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("delete-album-release-temp-files arguments are invalid.");
+        }
+
+        var release = await _context.AlbumReleases.FirstOrDefaultAsync(x => x.Id == arguments.AlbumReleaseId);
+        if (release == null)
+        {
+            throw new InvalidOperationException($"Album release not found: {arguments.AlbumReleaseId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Delete album release temp files started album_release_id={release.Id}");
+        var deleted = false;
+        if (!string.IsNullOrWhiteSpace(release.TempRootPath) && Directory.Exists(release.TempRootPath))
+        {
+            Directory.Delete(release.TempRootPath, recursive: true);
+            deleted = true;
+        }
+
+        release.TempRootPath = null;
+        release.OutputVideoPath = null;
+        release.ThumbnailPath = null;
+        release.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Delete album release temp files completed album_release_id={release.Id} deleted={deleted}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            albumReleaseId = release.Id,
+            deleted
+        });
+    }
+
+    private async Task<string> ProcessGenerateAlbumReleaseAssetsJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateGenerateAlbumReleaseAssetsJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("generate-album-release-assets arguments are invalid.");
+        }
+
+        var release = await _context.AlbumReleases.FirstOrDefaultAsync(x => x.Id == arguments.AlbumReleaseId);
+        if (release == null)
+        {
+            throw new InvalidOperationException($"Album release not found: {arguments.AlbumReleaseId}");
+        }
+
+        var playlist = await _context.Playlists
+            .Include(x => x.Tracks)
+            .FirstOrDefaultAsync(x => x.Id == release.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {release.PlaylistId}");
+        }
+
+        release.Status = AlbumReleaseStatus.Preparing;
+        release.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate album release assets started album_release_id={release.Id}");
+
+        var result = await GenerateAlbumReleaseAssetsAsync(job.Id, release, playlist);
+
+        release.OutputVideoPath = result.OutputVideoPath;
+        release.ThumbnailPath = result.ThumbnailPath;
+        release.TempRootPath = result.TempRootPath;
+        release.Status = AlbumReleaseStatus.Prepared;
+        release.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        release.FinishedAtUtc = null;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate album release assets completed album_release_id={release.Id} output={result.OutputVideoPath} thumbnail={result.ThumbnailPath}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            albumReleaseId = release.Id,
+            result.OutputVideoPath,
+            result.ThumbnailPath,
+            result.TempRootPath
+        });
+    }
+
+    private async Task<string> ProcessUploadAlbumReleaseToYoutubeJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateUploadAlbumReleaseToYoutubeJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("upload-album-release-youtube arguments are invalid.");
+        }
+
+        var release = await _context.AlbumReleases.FirstOrDefaultAsync(x => x.Id == arguments.AlbumReleaseId);
+        if (release == null)
+        {
+            throw new InvalidOperationException($"Album release not found: {arguments.AlbumReleaseId}");
+        }
+
+        var playlist = await _context.Playlists
+            .Include(x => x.Tracks)
+            .FirstOrDefaultAsync(x => x.Id == release.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {release.PlaylistId}");
+        }
+
+        release.Status = AlbumReleaseStatus.Uploading;
+        release.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Upload album release to YouTube started album_release_id={release.Id}");
+
+        var upload = await UploadAlbumReleaseToYoutubeAsync(job.Id, release, playlist);
+
+        release.YoutubeVideoId = upload.VideoId;
+        release.YoutubeUrl = upload.Url;
+        release.Status = AlbumReleaseStatus.Uploaded;
+        release.FinishedAtUtc = DateTimeOffset.UtcNow;
+        release.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Upload album release to YouTube completed album_release_id={release.Id} youtube_video_id={upload.VideoId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            albumReleaseId = release.Id,
+            upload.VideoId,
+            upload.Url
+        });
     }
 
     private async Task<string> ProcessGenerateAlbumJsonJobAsync(Job job, ScheduledCommandPayload payload)
@@ -976,6 +1116,25 @@ public class YtService
             return;
         }
 
+        if (string.Equals(job.TargetType, "album_release", StringComparison.OrdinalIgnoreCase) && job.TargetId is Guid albumReleaseId)
+        {
+            var release = await _context.AlbumReleases.FirstOrDefaultAsync(x => x.Id == albumReleaseId);
+            if (release != null)
+            {
+                release.Status = AlbumReleaseStatus.Failed;
+                release.FinishedAtUtc = DateTimeOffset.UtcNow;
+                release.UpdatedAtUtc = release.FinishedAtUtc.Value;
+                release.Metadata = JsonSerializer.Serialize(new
+                {
+                    lastError = errorMessage,
+                    failedAtUtc = release.FinishedAtUtc
+                });
+                await _context.SaveChangesAsync();
+            }
+
+            return;
+        }
+
         if (!string.Equals(job.TargetType, "track_loop", StringComparison.OrdinalIgnoreCase) || job.TargetId is not Guid loopId)
         {
             return;
@@ -1171,6 +1330,455 @@ public class YtService
             playlist.YoutubePlaylistId);
     }
 
+    private async Task<AlbumReleaseAssetsResult> GenerateAlbumReleaseAssetsAsync(Guid jobId, AlbumRelease release, Playlist playlist)
+    {
+        var workingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            throw new InvalidOperationException("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY is not configured.");
+        }
+
+        var playlistFolderPath = Path.Combine(workingDirectory, GetPlaylistFolderName(playlist.Id));
+        if (!Directory.Exists(playlistFolderPath))
+        {
+            throw new InvalidOperationException($"Playlist folder not found: {playlistFolderPath}");
+        }
+
+        var tempRoot = string.IsNullOrWhiteSpace(release.TempRootPath)
+            ? Path.Combine(workingDirectory, "tmp", "album-releases", playlist.Id.ToString())
+            : release.TempRootPath;
+        Directory.CreateDirectory(tempRoot);
+
+        var orderedTracks = playlist.Tracks
+            .OrderBy(x => x.PlaylistPosition)
+            .ToList();
+        if (orderedTracks.Count == 0)
+        {
+            throw new InvalidOperationException("Album release cannot be generated because the playlist has no tracks.");
+        }
+
+        var concatListPath = Path.Combine(tempRoot, "segments.txt");
+        var outputVideoPath = Path.Combine(tempRoot, "album_release.mp4");
+        var manifestPath = Path.Combine(tempRoot, "manifest.json");
+
+        var concatLines = new List<string>(orderedTracks.Count);
+        var trackManifest = new List<object>(orderedTracks.Count);
+        double offsetSeconds = 0d;
+
+        foreach (var track in orderedTracks)
+        {
+            var videoPath = ResolveVideoPathForPosition(playlistFolderPath, track.PlaylistPosition);
+            if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
+            {
+                throw new InvalidOperationException($"Missing rendered video for track {track.PlaylistPosition}: {track.Title}");
+            }
+
+            concatLines.Add($"file '{EscapeConcatFilePath(videoPath)}'");
+
+            var durationSeconds = await ProbeMediaDurationSecondsAsync(videoPath)
+                ?? ParseTrackDurationSeconds(track.Duration)
+                ?? 0d;
+            trackManifest.Add(new
+            {
+                track.PlaylistPosition,
+                track.Title,
+                StartOffset = FormatYoutubeTimestamp(offsetSeconds),
+                DurationSeconds = durationSeconds,
+                VideoPath = videoPath
+            });
+            offsetSeconds += durationSeconds;
+        }
+
+        await File.WriteAllLinesAsync(concatListPath, concatLines);
+
+        var ffmpegPath = Environment.GetEnvironmentVariable("FFMPEG_PATH") ?? "ffmpeg";
+        var concatResult = await ExecuteLoopConcatAsync(ffmpegPath, concatListPath, outputVideoPath);
+        if (!concatResult.Success)
+        {
+            throw new InvalidOperationException(concatResult.ErrorMessage ?? "Album release concat failed.");
+        }
+
+        var thumbnailPath = await CreateAlbumReleaseThumbnailAsync(jobId, release, playlist, playlistFolderPath, tempRoot, offsetSeconds);
+
+        var metadata = new
+        {
+            release.Id,
+            release.PlaylistId,
+            release.Title,
+            release.Description,
+            totalDurationSeconds = offsetSeconds,
+            createdAtUtc = DateTimeOffset.UtcNow,
+            concatListPath,
+            ffmpegCommand = concatResult.CommandLine,
+            tracks = trackManifest
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
+
+        return new AlbumReleaseAssetsResult(outputVideoPath, thumbnailPath, tempRoot);
+    }
+
+    private async Task<string?> CreateAlbumReleaseThumbnailAsync(
+        Guid jobId,
+        AlbumRelease release,
+        Playlist playlist,
+        string playlistFolderPath,
+        string tempRoot,
+        double totalDurationSeconds)
+    {
+        var imagePaths = playlist.Tracks
+            .OrderBy(x => x.PlaylistPosition)
+            .Select(track => ResolveYoutubeThumbnailPathForPosition(playlistFolderPath, track.PlaylistPosition)
+                ?? ResolveImagePathForPosition(playlistFolderPath, track.PlaylistPosition))
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (imagePaths.Count == 0)
+        {
+            await AppendJobLogAsync(jobId, "Warning", "Album release thumbnail skipped because source images are missing.");
+            return null;
+        }
+
+        var thumbnailVersion = ParseAlbumReleaseThumbnailVersion(release.Metadata);
+        var tileCount = Math.Min(4, imagePaths.Count);
+        var selected = Enumerable.Range(0, tileCount)
+            .Select(index => imagePaths[(thumbnailVersion + index) % imagePaths.Count])
+            .ToList();
+
+        var outputPath = Path.Combine(tempRoot, "album_release_thumbnail.jpg");
+        using var surface = SKSurface.Create(new SKImageInfo(1280, 720))
+            ?? throw new InvalidOperationException("Failed to create album release thumbnail surface.");
+        var canvas = surface.Canvas;
+        canvas.Clear(new SKColor(8, 11, 14));
+
+        var gap = 18;
+        var tiles = new[]
+        {
+            new SKRect(0, 0, 631, 351),
+            new SKRect(649, 0, 1280, 351),
+            new SKRect(0, 369, 631, 720),
+            new SKRect(649, 369, 1280, 720)
+        };
+
+        for (var index = 0; index < selected.Count; index++)
+        {
+            using var bitmap = SKBitmap.Decode(selected[index]);
+            if (bitmap == null)
+            {
+                continue;
+            }
+
+            var target = tiles[index];
+            target.Inflate(-gap, -gap);
+            DrawAlbumReleaseTile(canvas, bitmap, target);
+        }
+
+        using var overlay = new SKPaint
+        {
+            IsAntialias = true,
+            Shader = SKShader.CreateLinearGradient(
+                new SKPoint(0, 720),
+                new SKPoint(0, 360),
+                [new SKColor(6, 10, 12, 230), new SKColor(6, 10, 12, 40)],
+                [0f, 1f],
+                SKShaderTileMode.Clamp)
+        };
+        canvas.DrawRect(new SKRect(0, 360, 1280, 720), overlay);
+
+        var title = string.IsNullOrWhiteSpace(release.Title) ? $"{playlist.Title} | Full Album" : release.Title.Trim();
+        var subtitle = $"{playlist.Tracks.Count} Tracks • {FormatYoutubeTimestamp(totalDurationSeconds)} • Full Album";
+        DrawAlbumReleaseText(canvas, "ALBUM RELEASE", new SKRect(56, 468, 1224, 520), 34, new SKColor(109, 223, 174));
+        DrawAlbumReleaseText(canvas, title, new SKRect(56, 504, 1224, 618), 72, SKColors.White);
+        DrawAlbumReleaseText(canvas, subtitle, new SKRect(56, 620, 1224, 676), 30, new SKColor(205, 216, 224));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? tempRoot);
+        using var image = surface.Snapshot();
+        using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 92);
+        using var fileStream = File.Open(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        encoded.SaveTo(fileStream);
+        return outputPath;
+    }
+
+    private static void DrawAlbumReleaseTile(SKCanvas canvas, SKBitmap bitmap, SKRect target)
+    {
+        var sourceAspect = bitmap.Width / (float)bitmap.Height;
+        var targetAspect = target.Width / target.Height;
+
+        SKRect sourceRect;
+        if (sourceAspect > targetAspect)
+        {
+            var cropWidth = bitmap.Height * targetAspect;
+            var left = (bitmap.Width - cropWidth) / 2f;
+            sourceRect = new SKRect(left, 0, left + cropWidth, bitmap.Height);
+        }
+        else
+        {
+            var cropHeight = bitmap.Width / targetAspect;
+            var top = (bitmap.Height - cropHeight) / 2f;
+            sourceRect = new SKRect(0, top, bitmap.Width, top + cropHeight);
+        }
+
+        using var borderPaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(255, 255, 255, 28),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 2
+        };
+
+        canvas.DrawBitmap(bitmap, sourceRect, target);
+        canvas.DrawRoundRect(target, 24, 24, borderPaint);
+    }
+
+    private static void DrawAlbumReleaseText(SKCanvas canvas, string text, SKRect bounds, float maxSize, SKColor color)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        using var paint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = color,
+            Typeface = SKTypeface.Default,
+            TextSize = maxSize,
+            ImageFilter = SKImageFilter.CreateDropShadow(0, 4, 10, 10, new SKColor(0, 0, 0, 180))
+        };
+
+        while (paint.TextSize > 18)
+        {
+            var measured = paint.MeasureText(text);
+            if (measured <= bounds.Width)
+            {
+                break;
+            }
+
+            paint.TextSize -= 2;
+        }
+
+        var metrics = paint.FontMetrics;
+        var baseline = bounds.MidY - ((metrics.Ascent + metrics.Descent) / 2f);
+        canvas.DrawText(text, bounds.Left, baseline, paint);
+    }
+
+    private async Task<YoutubeUploadVideoResult> UploadAlbumReleaseToYoutubeAsync(Guid jobId, AlbumRelease release, Playlist playlist)
+    {
+        if (string.IsNullOrWhiteSpace(release.OutputVideoPath) || !File.Exists(release.OutputVideoPath))
+        {
+            throw new InvalidOperationException("Album release output video is missing. Generate assets first.");
+        }
+
+        var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
+        {
+            throw new InvalidOperationException("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY is not configured.");
+        }
+
+        var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_PROJECT")
+            ?? "OnlineTeamTools.MCP.YouTube/OnlineTeamTools.MCP.YouTube.csproj";
+        var allowedRoot = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_ALLOWED_ROOT")
+            ?? Environment.GetEnvironmentVariable("YT_PRODUCER_PLAYLIST_WORKING_DIRECTORY");
+
+        var durationSeconds = await ProbeMediaDurationSecondsAsync(release.OutputVideoPath)
+            ?? playlist.Tracks.Sum(x => ParseTrackDurationSeconds(x.Duration) ?? 0d);
+        var uploadMetadata = BuildAlbumReleaseUploadMetadata(release, playlist, durationSeconds);
+
+        var publishState = await GetOrCreateYoutubeLastPublishedDateAsync();
+        var publishAt = GetNextYoutubePublishSlotUtc(publishState.LastPublishedDate);
+        var result = await ExecuteYoutubeUploadVideoAsync(
+            mcpWorkingDirectory,
+            mcpProject,
+            allowedRoot,
+            release.OutputVideoPath,
+            uploadMetadata,
+            "private",
+            publishAt);
+
+        if (!result.Success || string.IsNullOrWhiteSpace(result.VideoId))
+        {
+            throw new InvalidOperationException(result.ErrorMessage ?? "Album release upload failed.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(release.ThumbnailPath) && File.Exists(release.ThumbnailPath))
+        {
+            await AppendJobLogAsync(jobId, "Info", $"Album release thumbnail upload started video_id={result.VideoId}");
+            var thumbnailResult = await ExecuteYoutubeUploadThumbnailAsync(
+                mcpWorkingDirectory,
+                mcpProject,
+                allowedRoot,
+                result.VideoId,
+                release.ThumbnailPath);
+
+            if (!thumbnailResult.Success)
+            {
+                throw new InvalidOperationException($"album release video uploaded but thumbnail failed: {thumbnailResult.ErrorMessage}");
+            }
+        }
+
+        if (publishAt > publishState.LastPublishedDate)
+        {
+            publishState.LastPublishedDate = publishAt;
+            publishState.VideoId = result.VideoId;
+            await _context.SaveChangesAsync();
+        }
+
+        return result;
+    }
+
+    private YoutubeUploadMetadata BuildAlbumReleaseUploadMetadata(AlbumRelease release, Playlist playlist, double durationSeconds)
+    {
+        var orderedTracks = playlist.Tracks
+            .OrderBy(x => x.PlaylistPosition)
+            .ToList();
+
+        var title = string.IsNullOrWhiteSpace(release.Title)
+            ? $"{playlist.Title} | Full Album"
+            : release.Title.Trim();
+
+        var description = string.IsNullOrWhiteSpace(release.Description)
+            ? BuildAlbumReleaseDescription(playlist, orderedTracks)
+            : release.Description.Trim();
+
+        if (!string.IsNullOrWhiteSpace(playlist.YoutubePlaylistId))
+        {
+            description = $"{description}{Environment.NewLine}{Environment.NewLine}Listen to the playlist: https://www.youtube.com/playlist?list={playlist.YoutubePlaylistId}";
+        }
+
+        var brandHandle = Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_CHANNEL_HANDLE");
+        if (!string.IsNullOrWhiteSpace(brandHandle))
+        {
+            description = $"{description}{Environment.NewLine}Subscribe: https://www.youtube.com/{brandHandle.Trim().TrimStart('@')}";
+        }
+
+        var tags = BuildAlbumReleaseTags(playlist, orderedTracks);
+        var hashtags = tags
+            .Take(5)
+            .Select(tag => $"#{NormalizeHashtag(tag)}")
+            .Where(tag => tag.Length > 1)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (hashtags.Count > 0 && !description.Contains('#'))
+        {
+            description = $"{description}{Environment.NewLine}{Environment.NewLine}{string.Join(" ", hashtags)}";
+        }
+
+        var chapters = BuildAlbumReleaseChapters(orderedTracks);
+
+        return new YoutubeUploadMetadata(
+            title,
+            description.Trim(),
+            tags,
+            hashtags,
+            chapters,
+            10,
+            "en",
+            "en",
+            false,
+            Math.Max(1, (int)Math.Ceiling(durationSeconds / 60d)));
+    }
+
+    private static string BuildAlbumReleaseDescription(Playlist playlist, IReadOnlyList<Track> tracks)
+    {
+        var lines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(playlist.Description))
+        {
+            lines.Add(playlist.Description.Trim());
+            lines.Add(string.Empty);
+        }
+
+        lines.Add("Tracklist:");
+        double offsetSeconds = 0d;
+        foreach (var track in tracks)
+        {
+            lines.Add($"{FormatYoutubeTimestamp(offsetSeconds)} - {track.Title}");
+            offsetSeconds += ParseTrackDurationSeconds(track.Duration) ?? 0d;
+        }
+
+        return string.Join(Environment.NewLine, lines).Trim();
+    }
+
+    private static IReadOnlyList<string> BuildAlbumReleaseTags(Playlist playlist, IReadOnlyList<Track> tracks)
+    {
+        var values = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(playlist.Theme))
+        {
+            values.Add(playlist.Theme);
+        }
+
+        if (!string.IsNullOrWhiteSpace(playlist.Title))
+        {
+            values.Add(playlist.Title);
+            values.AddRange(playlist.Title.Split([' ', '⚡', '|', '-', ':'], StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        foreach (var style in tracks.Select(x => x.Style).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>())
+        {
+            values.Add(style);
+        }
+
+        return values
+            .Select(value => value.Trim())
+            .Where(value => value.Length >= 3)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(10)
+            .ToList();
+    }
+
+    private static IReadOnlyList<string> BuildAlbumReleaseChapters(IReadOnlyList<Track> tracks)
+    {
+        var chapters = new List<string>(tracks.Count);
+        double offsetSeconds = 0d;
+        foreach (var track in tracks)
+        {
+            chapters.Add($"{FormatYoutubeTimestamp(offsetSeconds)} - {track.Title}");
+            offsetSeconds += ParseTrackDurationSeconds(track.Duration) ?? 0d;
+        }
+
+        return chapters;
+    }
+
+    private static int ParseAlbumReleaseThumbnailVersion(string? metadata)
+    {
+        if (string.IsNullOrWhiteSpace(metadata))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(metadata);
+            return document.RootElement.TryGetProperty("ThumbnailVersion", out var value) && value.TryGetInt32(out var parsed)
+                ? Math.Max(0, parsed)
+                : 0;
+        }
+        catch (JsonException)
+        {
+            return 0;
+        }
+    }
+
+    private static string FormatYoutubeTimestamp(double totalSeconds)
+    {
+        var safe = Math.Max(0, (int)Math.Round(totalSeconds));
+        var hours = safe / 3600;
+        var minutes = (safe % 3600) / 60;
+        var seconds = safe % 60;
+
+        return hours > 0
+            ? $"{hours}:{minutes:00}:{seconds:00}"
+            : $"{minutes}:{seconds:00}";
+    }
+
+    private static string NormalizeHashtag(string value)
+    {
+        var compact = Regex.Replace(value, "[^a-zA-Z0-9]+", string.Empty);
+        return compact.Length == 0 ? "Music" : compact;
+    }
+
     private async Task<YoutubeUploadVideoResult> UploadLoopToYoutubeAsync(
         Guid jobId,
         TrackLoop loop,
@@ -1334,17 +1942,25 @@ public class YtService
             return null;
         }
 
-        if (TimeSpan.TryParse(duration, out var parsed))
-        {
-            return parsed.TotalSeconds;
-        }
-
         var parts = duration.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 2 &&
             int.TryParse(parts[0], out var minutes) &&
             int.TryParse(parts[1], out var seconds))
         {
             return (minutes * 60) + seconds;
+        }
+
+        if (parts.Length == 3 &&
+            int.TryParse(parts[0], out var hours) &&
+            int.TryParse(parts[1], out minutes) &&
+            int.TryParse(parts[2], out seconds))
+        {
+            return (hours * 3600) + (minutes * 60) + seconds;
+        }
+
+        if (TimeSpan.TryParse(duration, out var parsed))
+        {
+            return parsed.TotalSeconds;
         }
 
         return null;
@@ -7633,6 +8249,8 @@ public class YtService
         public static YoutubeAddVideosResult Ok(int addedCount) => new(true, addedCount, null);
         public static YoutubeAddVideosResult Fail(string errorMessage) => new(false, 0, errorMessage);
     }
+
+    private sealed record AlbumReleaseAssetsResult(string OutputVideoPath, string? ThumbnailPath, string TempRootPath);
 
     private sealed record LoopConcatResult(bool Success, string CommandLine, string? ErrorMessage);
 

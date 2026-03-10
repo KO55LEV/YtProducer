@@ -15,5 +15,8 @@ public enum JobType
     GenerateYoutubePlaylist = 11,
     UploadYoutubeVideos = 12,
     AddYoutubeVideosToPlaylist = 13,
-    GenerateAlbumJson = 14
+    GenerateAlbumJson = 14,
+    DeleteAlbumReleaseTempFiles = 15,
+    GenerateAlbumReleaseAssets = 16,
+    UploadAlbumReleaseToYoutube = 17
 }

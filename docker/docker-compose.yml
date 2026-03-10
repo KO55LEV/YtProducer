@@ -12,6 +12,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./postgres/20260309_album_releases.sql:/docker-entrypoint-initdb.d/20260309_album_releases.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ytproducer -d ytproducer"]
       interval: 10s

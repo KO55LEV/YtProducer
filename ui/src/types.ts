@@ -27,6 +27,58 @@ export type Playlist = {
   tracks: Track[];
 };
 
+export type AlbumReleaseTrack = {
+  trackId: string;
+  playlistPosition: number;
+  title: string;
+  duration?: string | null;
+  durationSeconds: number;
+  startOffsetSeconds: number;
+  startOffsetLabel: string;
+  previewImageUrl?: string | null;
+  previewVideoUrl?: string | null;
+};
+
+export type AlbumRelease = {
+  id: string;
+  playlistId: string;
+  status: string;
+  title: string;
+  description?: string | null;
+  thumbnailPath?: string | null;
+  thumbnailUrl?: string | null;
+  outputVideoPath?: string | null;
+  outputVideoUrl?: string | null;
+  tempRootPath?: string | null;
+  youtubeVideoId?: string | null;
+  youtubeUrl?: string | null;
+  tempFilesExist: boolean;
+  tempFileCount: number;
+  trackCount: number;
+  totalDurationSeconds: number;
+  thumbnailVersion: number;
+  thumbnailPreviewUrls: string[];
+  tracks: AlbumReleaseTrack[];
+  metadata?: string | null;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+  finishedAtUtc?: string | null;
+};
+
+export type ScheduleDeleteAlbumReleaseTempFilesResponse = {
+  albumReleaseId: string;
+  jobId: string;
+  jobType: string;
+  jobStatus: string;
+};
+
+export type ScheduleAlbumReleaseJobResponse = {
+  albumReleaseId: string;
+  jobId: string;
+  jobType: string;
+  jobStatus: string;
+};
+
 export type PlaylistMediaFile = {
   fileName: string;
   url: string;

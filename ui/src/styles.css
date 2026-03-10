@@ -1914,6 +1914,11 @@ a {
   color: #effbff;
 }
 
+a.playlist-action-btn {
+  display: block;
+  text-decoration: none;
+}
+
 .playlist-action-btn:disabled {
   opacity: 0.6;
   cursor: wait;
@@ -2938,6 +2943,278 @@ a {
   line-height: 1.6;
 }
 
+.album-release-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 420px);
+  gap: 1.5rem;
+  margin-bottom: 1.6rem;
+  padding: 1.6rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 32%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.94), rgba(24, 24, 27, 0.98));
+  box-shadow: var(--shadow-xl);
+}
+
+.album-release-kicker {
+  display: inline-flex;
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 211, 252, 0.34);
+  background: rgba(14, 116, 144, 0.16);
+  color: #c7ecff;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.9rem;
+}
+
+.album-release-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.album-release-stats span {
+  padding: 0.5rem 0.72rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.album-release-cover-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.album-release-cover {
+  position: relative;
+  min-height: 25rem;
+  aspect-ratio: 16 / 9;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+  padding: 0.45rem;
+  border-radius: 1.6rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.album-release-cover-generated {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  border-radius: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: 0;
+}
+
+.album-release-cover-generated img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.album-release-cover-tile {
+  overflow: hidden;
+  border-radius: 1rem;
+  min-height: 0;
+}
+
+.album-release-cover-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.album-release-cover-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 16rem;
+  border-radius: 1rem;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  color: var(--color-text-muted);
+  font-weight: 700;
+}
+
+.album-release-cover-overlay {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.72));
+  color: #f8fafc;
+}
+
+.album-release-cover-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #a7f3d0;
+}
+
+.album-release-cover-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.album-release-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
+  gap: 1.4rem;
+}
+
+.album-release-main,
+.album-release-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.album-release-card {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(20, 20, 20, 0.98));
+}
+
+.album-release-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.album-release-form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.album-release-tracklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.album-release-track-row {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.album-release-track-time {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  color: #a7f3d0;
+  background: rgba(22, 163, 74, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  border-radius: 0.75rem;
+  min-height: 3rem;
+}
+
+.album-release-track-body {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  color: var(--color-text-secondary);
+}
+
+.album-release-track-body strong {
+  color: var(--color-text);
+}
+
+.album-release-stage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.album-release-stage-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.album-release-stage-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.9rem;
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--color-text-secondary);
+}
+
+.album-release-stage-item strong {
+  color: var(--color-text);
+}
+
+.album-release-temp-card {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: rgba(14, 116, 144, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  color: var(--color-text-secondary);
+}
+
+.album-release-temp-label {
+  display: block;
+  margin-bottom: 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #93c5fd;
+}
+
+.album-release-video {
+  width: 100%;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #020617;
+  min-height: 18rem;
+}
+
+.album-release-video-empty {
+  min-height: 16rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-muted);
+  line-height: 1.7;
+}
+
 /* ========================================
    Responsive
    ======================================== */
@@ -3016,6 +3293,20 @@ a {
   .jobs-monitor-layout,
   .job-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .album-release-hero,
+  .album-release-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .album-release-track-row {
+    grid-template-columns: 1fr;
+  }
+
+  .album-release-track-body {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .youtube-form-card {

@@ -31,4 +31,6 @@ public sealed class Playlist
     public ICollection<Track> Tracks { get; set; } = new List<Track>();
 
     public ICollection<TrackLoop> TrackLoops { get; set; } = new List<TrackLoop>();
+
+    public ICollection<AlbumRelease> AlbumReleases { get; set; } = new List<AlbumRelease>();
 }

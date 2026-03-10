@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Header from "./components/Header";
 import AlbumTemplates, { AlbumTemplateEditor, AlbumTemplateGenerations, AlbumTemplateManualUpload } from "./pages/AlbumTemplates";
+import AlbumReleasePage from "./pages/AlbumReleasePage";
 import CreateLoop from "./pages/CreateLoop";
 import Home from "./pages/Home";
 import JobsMonitor from "./pages/JobsMonitor";
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/album-templates/:id/generations" element={<AlbumTemplateGenerations />} />
             <Route path="/album-templates/:id/manual" element={<AlbumTemplateManualUpload />} />
             <Route path="/playlists/:id" element={<PlaylistDetail />} />
+            <Route path="/playlists/:id/album-release" element={<AlbumReleasePage />} />
             <Route path="/create-loop" element={<CreateLoop />} />
             <Route path="/jobs" element={<JobsMonitor />} />
             <Route path="/youtube-playlists" element={<YoutubePlaylists />} />

@@ -931,6 +931,12 @@ export default function PlaylistDetail() {
                   {addYoutubeVideosToPlaylistJobId && (
                     <span className="playlist-action-status">Scheduled</span>
                   )}
+                  <Link
+                    to={`/playlists/${playlist.id}/album-release`}
+                    className="playlist-action-btn playlist-action-btn-secondary"
+                  >
+                    Album Release
+                  </Link>
                 </div>
               </section>
             </div>

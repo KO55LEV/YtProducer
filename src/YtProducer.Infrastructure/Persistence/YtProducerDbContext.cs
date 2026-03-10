@@ -32,6 +32,8 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<TrackLoop> TrackLoops => Set<TrackLoop>();
 
+    public DbSet<AlbumRelease> AlbumReleases => Set<AlbumRelease>();
+
     public DbSet<YoutubeLastPublishedDate> YoutubeLastPublishedDates => Set<YoutubeLastPublishedDate>();
 
     public DbSet<PromptTemplate> PromptTemplates => Set<PromptTemplate>();
