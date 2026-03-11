@@ -12,13 +12,33 @@ public sealed class PromptTemplate
 
     public string? Description { get; set; }
 
+    public string? Notes { get; set; }
+
     public string TemplateBody { get; set; } = string.Empty;
+
+    public string? SystemPrompt { get; set; }
+
+    public string? UserPromptTemplate { get; set; }
 
     public string InputMode { get; set; } = "theme_only";
 
+    public string Provider { get; set; } = "google";
+
     public string? DefaultModel { get; set; }
 
+    public string OutputMode { get; set; } = "json";
+
+    public string? SchemaKey { get; set; }
+
+    public string? SettingsJson { get; set; }
+
+    public string? InputContractJson { get; set; }
+
+    public string? MetadataJson { get; set; }
+
     public bool IsActive { get; set; } = true;
+
+    public bool IsDefault { get; set; }
 
     public int SortOrder { get; set; }
 

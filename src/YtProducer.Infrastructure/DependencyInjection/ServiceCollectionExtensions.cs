@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using YtProducer.ReasoningAI.DependencyInjection;
 using YtProducer.Infrastructure.Persistence;
 using YtProducer.Infrastructure.Services;
 
@@ -52,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IYoutubeUploadQueueService, YoutubeUploadQueueService>();
 
         services.AddScoped<IMcpClient, McpClient>();
+        services.AddReasoningAI(configuration);
 
         return services;
     }

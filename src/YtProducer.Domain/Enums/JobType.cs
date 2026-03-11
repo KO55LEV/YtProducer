@@ -18,5 +18,8 @@ public enum JobType
     GenerateAlbumJson = 14,
     DeleteAlbumReleaseTempFiles = 15,
     GenerateAlbumReleaseAssets = 16,
-    UploadAlbumReleaseToYoutube = 17
+    UploadAlbumReleaseToYoutube = 17,
+    RunPromptGeneration = 18,
+    GenerateYoutubeEngagements = 19,
+    PostYoutubeEngagementComment = 20
 }

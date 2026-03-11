@@ -35,13 +35,30 @@ public sealed class PromptTemplateConfiguration : IEntityTypeConfiguration<Promp
             .HasColumnName("description")
             .HasColumnType("text");
 
+        builder.Property(x => x.Notes)
+            .HasColumnName("notes")
+            .HasColumnType("text");
+
         builder.Property(x => x.TemplateBody)
             .HasColumnName("template_body")
             .HasColumnType("text")
             .IsRequired();
 
+        builder.Property(x => x.SystemPrompt)
+            .HasColumnName("system_prompt")
+            .HasColumnType("text");
+
+        builder.Property(x => x.UserPromptTemplate)
+            .HasColumnName("user_prompt_template")
+            .HasColumnType("text");
+
         builder.Property(x => x.InputMode)
             .HasColumnName("input_mode")
+            .HasMaxLength(32)
+            .IsRequired();
+
+        builder.Property(x => x.Provider)
+            .HasColumnName("provider")
             .HasMaxLength(32)
             .IsRequired();
 
@@ -49,8 +66,36 @@ public sealed class PromptTemplateConfiguration : IEntityTypeConfiguration<Promp
             .HasColumnName("default_model")
             .HasMaxLength(100);
 
+        builder.Property(x => x.OutputMode)
+            .HasColumnName("output_mode")
+            .HasMaxLength(32)
+            .IsRequired();
+
+        builder.Property(x => x.SchemaKey)
+            .HasColumnName("schema_key")
+            .HasMaxLength(120);
+
+        builder.Property(x => x.SettingsJson)
+            .HasColumnName("settings_json")
+            .HasColumnType("jsonb")
+            .IsRequired();
+
+        builder.Property(x => x.InputContractJson)
+            .HasColumnName("input_contract_json")
+            .HasColumnType("jsonb")
+            .IsRequired();
+
+        builder.Property(x => x.MetadataJson)
+            .HasColumnName("metadata_json")
+            .HasColumnType("jsonb")
+            .IsRequired();
+
         builder.Property(x => x.IsActive)
             .HasColumnName("is_active")
+            .IsRequired();
+
+        builder.Property(x => x.IsDefault)
+            .HasColumnName("is_default")
             .IsRequired();
 
         builder.Property(x => x.SortOrder)
@@ -79,5 +124,7 @@ public sealed class PromptTemplateConfiguration : IEntityTypeConfiguration<Promp
         builder.HasIndex(x => x.Slug).IsUnique();
         builder.HasIndex(x => new { x.Category, x.SortOrder });
         builder.HasIndex(x => x.IsActive);
+        builder.HasIndex(x => x.Provider);
+        builder.HasIndex(x => x.IsDefault);
     }
 }

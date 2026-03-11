@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import type {
   Playlist,
   PlaylistMediaResponse,
@@ -60,6 +60,7 @@ function TrackReactionIcon({ type }: { type: "like" | "dislike" }) {
 }
 
 export default function PlaylistDetail() {
+  const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
   const [mediaByPosition, setMediaByPosition] = useState<Record<number, PlaylistTrackMedia>>({});
@@ -95,6 +96,8 @@ export default function PlaylistDetail() {
   const [uploadYoutubeVideosJobId, setUploadYoutubeVideosJobId] = useState<string | null>(null);
   const [addYoutubeVideosToPlaylistBusy, setAddYoutubeVideosToPlaylistBusy] = useState(false);
   const [addYoutubeVideosToPlaylistJobId, setAddYoutubeVideosToPlaylistJobId] = useState<string | null>(null);
+  const [generateYoutubeEngagementsBusy, setGenerateYoutubeEngagementsBusy] = useState(false);
+  const [generateYoutubeEngagementsJobId, setGenerateYoutubeEngagementsJobId] = useState<string | null>(null);
   const [musicPromptsOpen, setMusicPromptsOpen] = useState(false);
   const [musicPromptsLoading, setMusicPromptsLoading] = useState(false);
   const [musicPrompts, setMusicPrompts] = useState<PlaylistPromptResponse | null>(null);
@@ -609,6 +612,31 @@ export default function PlaylistDetail() {
     }
   }
 
+  async function handleGenerateYoutubeEngagements(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setGenerateYoutubeEngagementsBusy(true);
+      setError(null);
+
+      const response = await fetch(`${apiBaseUrl}/playlists/${id}/generate-youtube-engagements`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error(`Generate engagements failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as { jobId: string };
+      setGenerateYoutubeEngagementsJobId(data.jobId);
+      navigate(`/youtube-engagements?playlistId=${id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generate engagements failed");
+    } finally {
+      setGenerateYoutubeEngagementsBusy(false);
+    }
+  }
+
   async function handleOpenMusicPrompts(): Promise<void> {
     if (!id) return;
 
@@ -930,6 +958,21 @@ export default function PlaylistDetail() {
                   </button>
                   {addYoutubeVideosToPlaylistJobId && (
                     <span className="playlist-action-status">Scheduled</span>
+                  )}
+                  {playlist.youtubePlaylistId && (
+                    <>
+                      <button
+                        type="button"
+                        className="playlist-action-btn playlist-action-btn-secondary"
+                        onClick={() => void handleGenerateYoutubeEngagements()}
+                        disabled={generateYoutubeEngagementsBusy}
+                      >
+                        {generateYoutubeEngagementsBusy ? "Scheduling..." : "Engagements"}
+                      </button>
+                      {generateYoutubeEngagementsJobId && (
+                        <span className="playlist-action-status">Scheduled</span>
+                      )}
+                    </>
                   )}
                   <Link
                     to={`/playlists/${playlist.id}/album-release`}
@@ -1650,6 +1693,15 @@ function TrackAudioPlayer({
     setSeekValue(value);
   };
 
+  const beginSeek = () => {
+    setIsSeeking(true);
+    setSeekValue(progress);
+  };
+
+  const endSeek = () => {
+    setIsSeeking(false);
+  };
+
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
   const displayedProgress = isSeeking ? seekValue : progress;
 
@@ -1701,19 +1753,19 @@ function TrackAudioPlayer({
           max={100}
           step={0.1}
           value={displayedProgress}
-          onPointerDown={() => {
-            setIsSeeking(true);
-            setSeekValue(progress);
-          }}
-          onPointerUp={() => setIsSeeking(false)}
-          onTouchStart={() => {
-            setIsSeeking(true);
-            setSeekValue(progress);
-          }}
-          onTouchEnd={() => setIsSeeking(false)}
-          onBlur={() => setIsSeeking(false)}
+          onPointerDown={beginSeek}
+          onPointerUp={endSeek}
+          onMouseDown={beginSeek}
+          onMouseUp={endSeek}
+          onTouchStart={beginSeek}
+          onTouchEnd={endSeek}
+          onFocus={beginSeek}
+          onBlur={endSeek}
           onInput={(event) => handleSeek(Number((event.target as HTMLInputElement).value))}
-          onChange={(event) => handleSeek(Number(event.target.value))}
+          onChange={(event) => {
+            handleSeek(Number(event.target.value));
+            endSeek();
+          }}
           aria-label={`Scrub ${label}`}
         />
       </div>

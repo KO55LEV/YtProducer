@@ -17,6 +17,8 @@ using YtProducer.Domain.Enums;
 using YtProducer.Infrastructure.Persistence;
 using YtProducer.Media.Models;
 using YtProducer.Media.Services;
+using YtProducer.ReasoningAI;
+using YtProducer.ReasoningAI.Abstractions;
 
 namespace YtProducer.Console.Services;
 
@@ -43,19 +45,22 @@ public class YtService
     private readonly ILogger<YtService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly YoutubeSeoService _youtubeSeoService;
+    private readonly IReasoningClientFactory _reasoningClientFactory;
 
     public YtService(
         YtProducerDbContext context,
         ApiClient apiClient,
         ILogger<YtService> logger,
         IServiceScopeFactory scopeFactory,
-        YoutubeSeoService youtubeSeoService)
+        YoutubeSeoService youtubeSeoService,
+        IReasoningClientFactory reasoningClientFactory)
     {
         _context = context;
         _apiClient = apiClient;
         _logger = logger;
         _scopeFactory = scopeFactory;
         _youtubeSeoService = youtubeSeoService;
+        _reasoningClientFactory = reasoningClientFactory;
     }
 
     public async Task RunPlaylistInitAsync(string[] commandArgs)
@@ -206,11 +211,13 @@ public class YtService
                 {
                     await using var scope = _scopeFactory.CreateAsyncScope();
                     var scopedContext = scope.ServiceProvider.GetRequiredService<YtProducerDbContext>();
+                    var heartbeatAt = DateTimeOffset.UtcNow;
+                    var leaseExpiresAt = heartbeatAt.Add(leaseDuration);
                     var affected = await scopedContext.Jobs
                         .Where(x => x.Id == job.Id && x.Status == JobStatus.Running && x.WorkerId == workerId)
                         .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(x => x.LastHeartbeat, DateTimeOffset.UtcNow)
-                            .SetProperty(x => x.LeaseExpiresAt, DateTimeOffset.UtcNow.Add(leaseDuration))
+                            .SetProperty(x => x.LastHeartbeat, heartbeatAt)
+                            .SetProperty(x => x.LeaseExpiresAt, leaseExpiresAt)
                             .SetProperty(x => x.Progress, job.Progress), heartbeatCts.Token);
 
                     if (affected == 0)
@@ -386,6 +393,7 @@ public class YtService
         {
             "playlist-init" => await ProcessPlaylistInitJobAsync(job, payload),
             "generate-album-json" => await ProcessGenerateAlbumJsonJobAsync(job, payload),
+            "run-prompt-generation" => await ProcessRunPromptGenerationJobAsync(job, payload),
             "generate-all-images" => await ProcessGenerateAllImagesJobAsync(job, payload),
             "generate-all-music" => await ProcessGenerateAllMusicJobAsync(job, payload),
             "track-create-youtube-video-thumbnail-v2" => await ProcessGenerateThumbnailsJobAsync(job, payload),
@@ -393,6 +401,8 @@ public class YtService
             "generate-youtube-playlist" => await ProcessGenerateYoutubePlaylistJobAsync(job, payload),
             "upload-youtube-videos" => await ProcessUploadYoutubeVideosJobAsync(job, payload),
             "add-youtube-videos-to-playlist" => await ProcessAddYoutubeVideosToPlaylistJobAsync(job, payload),
+            "generate-youtube-engagements" => await ProcessGenerateYoutubeEngagementsJobAsync(job, payload),
+            "post-youtube-engagement-comment" => await ProcessPostYoutubeEngagementCommentJobAsync(job, payload),
             "delete-album-release-temp-files" => await ProcessDeleteAlbumReleaseTempFilesJobAsync(job, payload),
             "generate-album-release-assets" => await ProcessGenerateAlbumReleaseAssetsJobAsync(job, payload),
             "upload-album-release-youtube" => await ProcessUploadAlbumReleaseToYoutubeJobAsync(job, payload),
@@ -538,11 +548,17 @@ public class YtService
     }
 
     private async Task<string> ProcessGenerateAlbumJsonJobAsync(Job job, ScheduledCommandPayload payload)
+        => await ProcessRunPromptGenerationInternalAsync(job, payload, "generate-album-json");
+
+    private async Task<string> ProcessRunPromptGenerationJobAsync(Job job, ScheduledCommandPayload payload)
+        => await ProcessRunPromptGenerationInternalAsync(job, payload, "run-prompt-generation");
+
+    private async Task<string> ProcessRunPromptGenerationInternalAsync(Job job, ScheduledCommandPayload payload, string commandName)
     {
         var arguments = payload.Arguments.Deserialize<CreatePromptGenerationJobArguments>();
         if (arguments == null)
         {
-            throw new InvalidOperationException("generate-album-json arguments are invalid.");
+            throw new InvalidOperationException($"{commandName} arguments are invalid.");
         }
 
         var generation = await _context.PromptGenerations
@@ -565,84 +581,93 @@ public class YtService
         generation.ErrorMessage = null;
         await _context.SaveChangesAsync();
 
-        await AppendJobLogAsync(job.Id, "Info", $"Album generation started prompt_generation_id={generation.Id} model={generation.Model ?? generation.Template.DefaultModel ?? "gemini-3.1-pro"}");
-
-        var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY");
-        if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
-        {
-            throw new InvalidOperationException("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY is not configured.");
-        }
-
-        var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_PROJECT")
-            ?? "OnlineTeamTools.MCP.KieAi/OnlineTeamTools.MCP.KieAi.csproj";
+        await AppendJobLogAsync(job.Id, "Info", $"Prompt generation started prompt_generation_id={generation.Id} provider={generation.Provider} model={generation.Model ?? generation.Template.DefaultModel ?? "gemini-3.1-pro"}");
 
         var model = string.IsNullOrWhiteSpace(generation.Model)
             ? (generation.Template.DefaultModel ?? "gemini-3.1-pro")
             : generation.Model.Trim();
 
+        var executionStopwatch = Stopwatch.StartNew();
         var execution = await ExecutePromptGenerationAsync(
-            mcpWorkingDirectory,
-            mcpProject,
+            generation.Provider,
             model,
-            generation.Template.TemplateBody,
-            generation.InputJson);
+            generation.ResolvedSystemPrompt,
+            generation.ResolvedUserPrompt);
+        executionStopwatch.Stop();
 
         if (!execution.Success)
         {
             generation.Status = PromptGenerationStatus.Failed;
             generation.FinishedAtUtc = DateTimeOffset.UtcNow;
             generation.ErrorMessage = execution.ErrorMessage;
+            generation.LatencyMs = (int)executionStopwatch.ElapsedMilliseconds;
             await _context.SaveChangesAsync();
 
-            await AppendJobLogAsync(job.Id, "Error", $"Album generation failed prompt_generation_id={generation.Id}", execution.ErrorMessage);
+            await AppendJobLogAsync(job.Id, "Error", $"Prompt generation failed prompt_generation_id={generation.Id}", execution.ErrorMessage);
             throw new InvalidOperationException(execution.ErrorMessage ?? "Prompt generation failed.");
         }
 
         var normalizedRawText = NormalizeReturnedJson(execution.RawText);
         var isValidJson = TryFormatJson(normalizedRawText, out var formattedJson, out var validationErrors);
+        var expectsJson = string.Equals(generation.Template.OutputMode, "json", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(generation.Template.SchemaKey);
+        var runSucceeded = expectsJson ? isValidJson : true;
 
         var output = new PromptGenerationOutput
         {
             Id = Guid.NewGuid(),
             PromptGenerationId = generation.Id,
-            OutputType = "album_json",
-            RawText = execution.RawText,
-            FormattedJson = formattedJson,
-            IsValidJson = isValidJson,
-            ValidationErrors = validationErrors,
+            OutputType = string.IsNullOrWhiteSpace(generation.Template.OutputMode) ? "text" : generation.Template.OutputMode.Trim(),
+            OutputLabel = "Primary Output",
+            OutputText = execution.RawText,
+            OutputJson = isValidJson ? formattedJson : null,
+            IsPrimary = true,
+            IsValid = runSucceeded,
+            ValidationErrors = runSucceeded ? null : validationErrors,
+            ProviderResponseJson = execution.RawResponseJson,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
         generation.Outputs.Add(output);
-        generation.Status = isValidJson ? PromptGenerationStatus.Completed : PromptGenerationStatus.Failed;
+        generation.Status = runSucceeded ? PromptGenerationStatus.Completed : PromptGenerationStatus.Failed;
         generation.FinishedAtUtc = DateTimeOffset.UtcNow;
-        generation.ErrorMessage = isValidJson ? null : validationErrors;
+        generation.ErrorMessage = runSucceeded ? null : validationErrors;
+        generation.LatencyMs = (int)executionStopwatch.ElapsedMilliseconds;
+        generation.RunMetadataJson = JsonSerializer.Serialize(new
+        {
+            provider = generation.Provider,
+            model = execution.Model,
+            finishReason = execution.FinishReason
+        });
+        generation.TokenUsageJson = execution.UsageJson ?? "{}";
         await _context.SaveChangesAsync();
 
         await AppendJobLogAsync(
             job.Id,
-            isValidJson ? "Info" : "Warning",
-            $"Album generation completed prompt_generation_id={generation.Id} valid_json={isValidJson.ToString().ToLowerInvariant()}",
+            runSucceeded ? "Info" : "Warning",
+            $"Prompt generation completed prompt_generation_id={generation.Id} valid_json={isValidJson.ToString().ToLowerInvariant()}",
             JsonSerializer.Serialize(new
             {
                 generationId = generation.Id,
                 outputId = output.Id,
                 model,
+                outputType = output.OutputType,
                 validationErrors
             }));
 
-        if (!isValidJson)
+        if (!runSucceeded)
         {
-            throw new InvalidOperationException(validationErrors ?? "Album generation returned invalid JSON.");
+            throw new InvalidOperationException(validationErrors ?? "Prompt generation returned invalid output.");
         }
 
         return JsonSerializer.Serialize(new
         {
             ok = true,
-            command = payload.Command,
+            command = commandName,
             promptGenerationId = generation.Id,
             outputId = output.Id,
             model,
+            outputType = output.OutputType,
             validationErrors = (string?)null
         });
     }
@@ -882,6 +907,112 @@ public class YtService
             ok = true,
             command = payload.Command,
             playlistId = arguments.PlaylistId
+        });
+    }
+
+    private async Task<string> ProcessGenerateYoutubeEngagementsJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreateGenerateYoutubeEngagementsJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("generate-youtube-engagements arguments are invalid.");
+        }
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == arguments.PlaylistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {arguments.PlaylistId}");
+        }
+
+        await AppendJobLogAsync(job.Id, "Info", $"Generate YouTube engagements started playlist_id={arguments.PlaylistId}");
+        var generatedCount = await GenerateYoutubeEngagementsForPlaylistAsync(job.Id, arguments.PlaylistId);
+        await AppendJobLogAsync(job.Id, "Info", $"Generate YouTube engagements completed playlist_id={arguments.PlaylistId} count={generatedCount}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            playlistId = arguments.PlaylistId,
+            generatedCount
+        });
+    }
+
+    private async Task<string> ProcessPostYoutubeEngagementCommentJobAsync(Job job, ScheduledCommandPayload payload)
+    {
+        var arguments = payload.Arguments.Deserialize<CreatePostYoutubeEngagementCommentJobArguments>();
+        if (arguments == null)
+        {
+            throw new InvalidOperationException("post-youtube-engagement-comment arguments are invalid.");
+        }
+
+        var engagement = await _context.YoutubeVideoEngagements.FirstOrDefaultAsync(x => x.Id == arguments.YoutubeVideoEngagementId);
+        if (engagement == null)
+        {
+            throw new InvalidOperationException($"YouTube engagement not found: {arguments.YoutubeVideoEngagementId}");
+        }
+
+        if (string.IsNullOrWhiteSpace(engagement.YoutubeVideoId))
+        {
+            throw new InvalidOperationException("YouTube video id is missing.");
+        }
+
+        var message = engagement.FinalText?.Trim();
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            throw new InvalidOperationException("Final engagement message is empty.");
+        }
+
+        var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY");
+        if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
+        {
+            throw new InvalidOperationException("YT_PRODUCER_MCP_YOUTUBE_WORKING_DIRECTORY is not configured.");
+        }
+
+        var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_YOUTUBE_PROJECT")
+            ?? "OnlineTeamTools.MCP.YouTube/OnlineTeamTools.MCP.YouTube.csproj";
+
+        await AppendJobLogAsync(job.Id, "Info", $"Post YouTube engagement started engagement_id={engagement.Id} video_id={engagement.YoutubeVideoId}");
+
+        var postResult = await ExecuteYoutubeAddCommentAsync(
+            mcpWorkingDirectory,
+            mcpProject,
+            engagement.YoutubeVideoId,
+            message);
+
+        if (!postResult.Success || string.IsNullOrWhiteSpace(postResult.CommentId))
+        {
+            engagement.Status = YoutubeVideoEngagementStatus.Failed;
+            engagement.ErrorMessage = postResult.ErrorMessage ?? "Unknown YouTube comment posting error.";
+            engagement.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await _context.SaveChangesAsync();
+            await AppendJobLogAsync(job.Id, "Error", $"Post YouTube engagement failed engagement_id={engagement.Id}", engagement.ErrorMessage);
+
+            return JsonSerializer.Serialize(new
+            {
+                ok = false,
+                command = payload.Command,
+                engagementId = engagement.Id,
+                error = engagement.ErrorMessage
+            });
+        }
+
+        engagement.YoutubeCommentId = postResult.CommentId;
+        engagement.PostedAtUtc = DateTimeOffset.UtcNow;
+        engagement.Status = YoutubeVideoEngagementStatus.Posted;
+        engagement.ErrorMessage = null;
+        engagement.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await AppendJobLogAsync(job.Id, "Info", $"Post YouTube engagement completed engagement_id={engagement.Id} comment_id={postResult.CommentId}");
+
+        return JsonSerializer.Serialize(new
+        {
+            ok = true,
+            command = payload.Command,
+            engagementId = engagement.Id,
+            commentId = postResult.CommentId
         });
     }
 
@@ -6185,7 +6316,7 @@ public class YtService
     private static string BuildChatCompletionRequestJson(
         string model,
         string systemPrompt,
-        string userInputJson)
+        string userPrompt)
     {
         var payload = new
         {
@@ -6223,7 +6354,7 @@ public class YtService
                                 new
                                 {
                                     type = "text",
-                                    text = userInputJson
+                                    text = userPrompt
                                 }
                             }
                         }
@@ -6355,15 +6486,56 @@ public class YtService
     }
 
     private async Task<ChatCompletionExecutionResult> ExecutePromptGenerationAsync(
-        string mcpWorkingDirectory,
-        string mcpProject,
+        string provider,
         string model,
         string systemPrompt,
-        string userInputJson)
+        string userPrompt)
     {
+        var normalizedProvider = provider?.Trim().ToLowerInvariant();
+        if (normalizedProvider == "kie_ai" || normalizedProvider == "kieai" || normalizedProvider == "kie")
+        {
+            try
+            {
+                var client = _reasoningClientFactory.GetClient(ReasoningProvider.KieAi);
+                var response = await client.CompleteAsync(
+                    new ReasoningRequest(
+                        model,
+                        systemPrompt,
+                        userPrompt),
+                    CancellationToken.None);
+
+                return ChatCompletionExecutionResult.Ok(
+                    response.Text,
+                    response.Model,
+                    response.FinishReason,
+                    response.RawResponseJson,
+                    response.Usage is null ? null : JsonSerializer.Serialize(response.Usage));
+            }
+            catch (ReasoningClientException ex)
+            {
+                var message = string.IsNullOrWhiteSpace(ex.ResponseBody)
+                    ? ex.Message
+                    : $"{ex.Message} Response: {ex.ResponseBody}";
+                return ChatCompletionExecutionResult.Fail(message);
+            }
+            catch (Exception ex)
+            {
+                return ChatCompletionExecutionResult.Fail(ex.Message);
+            }
+        }
+
         try
         {
-            var requestJson = BuildChatCompletionRequestJson(model, systemPrompt, userInputJson);
+            var mcpWorkingDirectory = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY");
+            if (string.IsNullOrWhiteSpace(mcpWorkingDirectory))
+            {
+                throw new InvalidOperationException("YT_PRODUCER_MCP_KIEAI_WORKING_DIRECTORY is not configured.");
+            }
+
+            var mcpProject = Environment.GetEnvironmentVariable("YT_PRODUCER_MCP_KIEAI_PROJECT")
+                ?? "OnlineTeamTools.MCP.KieAi/OnlineTeamTools.MCP.KieAi.csproj";
+
+            var requestJson = BuildChatCompletionRequestJson(model, systemPrompt, userPrompt);
 
             var startInfo = new ProcessStartInfo
             {
@@ -6427,7 +6599,7 @@ public class YtService
                 return ChatCompletionExecutionResult.Fail("Kie chat_completion did not return text.");
             }
 
-            return ChatCompletionExecutionResult.Ok(text);
+            return ChatCompletionExecutionResult.Ok(text, model, null, resultNode.GetRawText(), null);
         }
         catch (Exception ex)
         {
@@ -7064,6 +7236,27 @@ public class YtService
         return JsonSerializer.Serialize(payload);
     }
 
+    private static string BuildYoutubeAddCommentRequestJson(string videoId, string text)
+    {
+        var payload = new
+        {
+            jsonrpc = "2.0",
+            id = 15,
+            method = "tools/call",
+            @params = new
+            {
+                name = "youtube.add_comment",
+                arguments = new
+                {
+                    video_id = videoId,
+                    text
+                }
+            }
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
     private async Task<YoutubeAddVideosResult> ExecuteYoutubeAddVideosToPlaylistAsync(
         string mcpWorkingDirectory,
         string mcpProject,
@@ -7135,6 +7328,77 @@ public class YtService
         catch (Exception ex)
         {
             return YoutubeAddVideosResult.Fail(ex.Message);
+        }
+    }
+
+    private async Task<YoutubeAddCommentResult> ExecuteYoutubeAddCommentAsync(
+        string mcpWorkingDirectory,
+        string mcpProject,
+        string videoId,
+        string text)
+    {
+        try
+        {
+            var requestJson = BuildYoutubeAddCommentRequestJson(videoId, text);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"run --project \"{mcpProject}\"",
+                WorkingDirectory = mcpWorkingDirectory,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            await process.StandardInput.WriteLineAsync(requestJson);
+            process.StandardInput.Close();
+            var stdOut = await process.StandardOutput.ReadToEndAsync();
+            var stdErr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                var error = string.IsNullOrWhiteSpace(stdErr) ? $"MCP process exit code {process.ExitCode}" : stdErr.Trim();
+                return YoutubeAddCommentResult.Fail(error);
+            }
+
+            var jsonLine = TryExtractJsonRpcLine(stdOut);
+            if (string.IsNullOrWhiteSpace(jsonLine))
+            {
+                return YoutubeAddCommentResult.Fail("MCP response did not contain JSON-RPC payload.");
+            }
+
+            using var responseDoc = JsonDocument.Parse(jsonLine);
+            var root = responseDoc.RootElement;
+
+            if (root.TryGetProperty("error", out var errorNode))
+            {
+                return YoutubeAddCommentResult.Fail(errorNode.GetRawText());
+            }
+
+            if (root.TryGetProperty("result", out var resultNode))
+            {
+                if (resultNode.TryGetProperty("data", out var dataNode))
+                {
+                    resultNode = dataNode;
+                }
+
+                var commentId = TryGetStringProperty(resultNode, "comment_id");
+                if (!string.IsNullOrWhiteSpace(commentId))
+                {
+                    return YoutubeAddCommentResult.Ok(commentId);
+                }
+            }
+
+            return YoutubeAddCommentResult.Fail("comment_id not returned from MCP.");
+        }
+        catch (Exception ex)
+        {
+            return YoutubeAddCommentResult.Fail(ex.Message);
         }
     }
 
@@ -8201,10 +8465,20 @@ public class YtService
         public static MusicGenerationExecutionResult Fail(string errorMessage) => new(false, Array.Empty<SavedAudioArtifact>(), errorMessage);
     }
 
-    private sealed record ChatCompletionExecutionResult(bool Success, string? RawText, string? ErrorMessage)
+    private sealed record ChatCompletionExecutionResult(
+        bool Success,
+        string? RawText,
+        string? ErrorMessage,
+        string? Model,
+        string? FinishReason,
+        string? RawResponseJson,
+        string? UsageJson)
     {
-        public static ChatCompletionExecutionResult Ok(string rawText) => new(true, rawText, null);
-        public static ChatCompletionExecutionResult Fail(string errorMessage) => new(false, null, errorMessage);
+        public static ChatCompletionExecutionResult Ok(string rawText, string? model, string? finishReason, string? rawResponseJson, string? usageJson)
+            => new(true, rawText, null, model, finishReason, rawResponseJson, usageJson);
+
+        public static ChatCompletionExecutionResult Fail(string errorMessage)
+            => new(false, null, errorMessage, null, null, null, null);
     }
 
     private sealed record YoutubePlaylistCreateResult(bool Success, string? PlaylistId, string? ErrorMessage)
@@ -8248,6 +8522,12 @@ public class YtService
     {
         public static YoutubeAddVideosResult Ok(int addedCount) => new(true, addedCount, null);
         public static YoutubeAddVideosResult Fail(string errorMessage) => new(false, 0, errorMessage);
+    }
+
+    private sealed record YoutubeAddCommentResult(bool Success, string? CommentId, string? ErrorMessage)
+    {
+        public static YoutubeAddCommentResult Ok(string commentId) => new(true, commentId, null);
+        public static YoutubeAddCommentResult Fail(string errorMessage) => new(false, null, errorMessage);
     }
 
     private sealed record AlbumReleaseAssetsResult(string OutputVideoPath, string? ThumbnailPath, string TempRootPath);
@@ -8636,5 +8916,240 @@ public class YtService
                 }
             }
         }
+    }
+
+    private async Task<int> GenerateYoutubeEngagementsForPlaylistAsync(Guid jobId, Guid playlistId)
+    {
+        const string engagementType = "pinned_comment_candidate";
+        const string templateSlug = "youtube-pinned-comment-candidate";
+
+        var playlist = await _context.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == playlistId);
+        if (playlist == null)
+        {
+            throw new InvalidOperationException($"Playlist not found: {playlistId}");
+        }
+
+        var youtubePlaylist = await _context.YoutubePlaylists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.PlaylistId == playlistId);
+
+        var channelId = !string.IsNullOrWhiteSpace(youtubePlaylist?.ChannelId)
+            ? youtubePlaylist.ChannelId!.Trim()
+            : (Environment.GetEnvironmentVariable("YT_PRODUCER_YOUTUBE_CHANNEL_ID")?.Trim() ?? "default");
+
+        var template = await _context.PromptTemplates
+            .FirstOrDefaultAsync(x => x.Slug == templateSlug && x.IsActive);
+        if (template == null)
+        {
+            throw new InvalidOperationException($"Prompt template not found: {templateSlug}");
+        }
+
+        var uploadedTracks = await _context.TrackOnYoutube
+            .AsNoTracking()
+            .Where(x => x.PlaylistId == playlistId)
+            .OrderBy(x => x.PlaylistPosition)
+            .ToListAsync();
+
+        if (uploadedTracks.Count == 0)
+        {
+            throw new InvalidOperationException("No uploaded track videos found for this playlist.");
+        }
+
+        var trackIds = uploadedTracks.Select(x => x.TrackId).Distinct().ToList();
+        var tracks = await _context.Tracks
+            .AsNoTracking()
+            .Where(x => trackIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id);
+
+        var generatedCount = 0;
+
+        foreach (var uploadedTrack in uploadedTracks)
+        {
+            if (!tracks.TryGetValue(uploadedTrack.TrackId, out var track))
+            {
+                await AppendJobLogAsync(jobId, "Warning", $"Track metadata missing for uploaded video track_id={uploadedTrack.TrackId}");
+                continue;
+            }
+
+            var inputJson = BuildYoutubeEngagementInputJson(track, playlist, uploadedTrack);
+            var inputLabel = $"{track.Title} pinned comment candidate";
+            var resolvedSystemPrompt = template.SystemPrompt?.Trim() ?? string.Empty;
+            var resolvedUserPrompt = RenderPromptUserTemplate(template, inputLabel, inputJson);
+
+            var generation = new PromptGeneration
+            {
+                Id = Guid.NewGuid(),
+                TemplateId = template.Id,
+                Purpose = template.Category,
+                Provider = template.Provider,
+                Status = PromptGenerationStatus.Running,
+                Model = string.IsNullOrWhiteSpace(template.DefaultModel) ? "gemini-2.5-pro" : template.DefaultModel!.Trim(),
+                InputLabel = inputLabel,
+                InputJson = inputJson,
+                ResolvedSystemPrompt = resolvedSystemPrompt,
+                ResolvedUserPrompt = resolvedUserPrompt,
+                TargetType = "track",
+                TargetId = track.Id.ToString(),
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                StartedAtUtc = DateTimeOffset.UtcNow,
+                TokenUsageJson = "{}",
+                RunMetadataJson = "{}"
+            };
+
+            var engagement = await _context.YoutubeVideoEngagements
+                .FirstOrDefaultAsync(x =>
+                    x.PlaylistId == playlistId &&
+                    x.TrackId == track.Id &&
+                    x.YoutubeVideoId == uploadedTrack.VideoId &&
+                    x.EngagementType == engagementType);
+
+            if (engagement == null)
+            {
+                engagement = new YoutubeVideoEngagement
+                {
+                    Id = Guid.NewGuid(),
+                    ChannelId = channelId,
+                    YoutubeVideoId = uploadedTrack.VideoId,
+                    TrackId = track.Id,
+                    PlaylistId = playlistId,
+                    EngagementType = engagementType,
+                    Status = YoutubeVideoEngagementStatus.Draft,
+                    MetadataJson = JsonSerializer.Serialize(new
+                    {
+                        trackTitle = track.Title,
+                        playlistTitle = playlist.Title,
+                        playlistPosition = track.PlaylistPosition,
+                        youtubeTitle = uploadedTrack.Title ?? track.YouTubeTitle ?? track.Title
+                    }),
+                    CreatedAtUtc = DateTimeOffset.UtcNow
+                };
+
+                _context.YoutubeVideoEngagements.Add(engagement);
+            }
+
+            _context.PromptGenerations.Add(generation);
+
+            engagement.PromptTemplateId = template.Id;
+            engagement.PromptGenerationId = generation.Id;
+            engagement.Provider = generation.Provider;
+            engagement.Model = generation.Model;
+            engagement.GeneratedText = null;
+            engagement.FinalText = null;
+            engagement.ErrorMessage = null;
+            engagement.Status = YoutubeVideoEngagementStatus.Draft;
+            engagement.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            await AppendJobLogAsync(jobId, "Info", $"Generating engagement track_id={track.Id} video_id={uploadedTrack.VideoId}");
+
+            var stopwatch = Stopwatch.StartNew();
+            var execution = await ExecutePromptGenerationAsync(
+                generation.Provider,
+                generation.Model ?? "gemini-2.5-pro",
+                generation.ResolvedSystemPrompt,
+                generation.ResolvedUserPrompt);
+            stopwatch.Stop();
+
+            generation.LatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            generation.FinishedAtUtc = DateTimeOffset.UtcNow;
+            generation.TokenUsageJson = execution.UsageJson ?? "{}";
+            generation.RunMetadataJson = JsonSerializer.Serialize(new
+            {
+                provider = generation.Provider,
+                model = execution.Model,
+                finishReason = execution.FinishReason
+            });
+
+            if (!execution.Success)
+            {
+                generation.Status = PromptGenerationStatus.Failed;
+                generation.ErrorMessage = execution.ErrorMessage;
+
+                engagement.Status = YoutubeVideoEngagementStatus.Failed;
+                engagement.ErrorMessage = execution.ErrorMessage;
+                engagement.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+                await _context.SaveChangesAsync();
+                await AppendJobLogAsync(jobId, "Error", $"Engagement generation failed track_id={track.Id}", execution.ErrorMessage);
+                continue;
+            }
+
+            var outputText = string.IsNullOrWhiteSpace(execution.RawText)
+                ? string.Empty
+                : execution.RawText.Trim();
+
+            var output = new PromptGenerationOutput
+            {
+                Id = Guid.NewGuid(),
+                PromptGenerationId = generation.Id,
+                OutputType = "text",
+                OutputLabel = "Primary Output",
+                OutputText = outputText,
+                OutputJson = null,
+                IsPrimary = true,
+                IsValid = !string.IsNullOrWhiteSpace(outputText),
+                ValidationErrors = string.IsNullOrWhiteSpace(outputText) ? "Prompt generation returned empty text." : null,
+                ProviderResponseJson = execution.RawResponseJson,
+                CreatedAtUtc = DateTimeOffset.UtcNow
+            };
+
+            generation.Outputs.Add(output);
+            generation.Status = output.IsValid ? PromptGenerationStatus.Completed : PromptGenerationStatus.Failed;
+            generation.ErrorMessage = output.ValidationErrors;
+
+            engagement.GeneratedText = outputText;
+            engagement.FinalText = outputText;
+            engagement.ErrorMessage = output.ValidationErrors;
+            engagement.Status = output.IsValid ? YoutubeVideoEngagementStatus.Generated : YoutubeVideoEngagementStatus.Failed;
+            engagement.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            if (output.IsValid)
+            {
+                generatedCount++;
+            }
+        }
+
+        return generatedCount;
+    }
+
+    private static string BuildYoutubeEngagementInputJson(Track track, Playlist playlist, TrackOnYoutube uploadedTrack)
+    {
+        var payload = new
+        {
+            track_title = track.Title,
+            youtube_title = uploadedTrack.Title ?? track.YouTubeTitle ?? track.Title,
+            genre = track.Style ?? TryGetMetadataString(track.Metadata, "styleSummary") ?? "Workout Music",
+            theme = playlist.Theme ?? playlist.Title,
+            tempo_bpm = track.TempoBpm,
+            key = track.Key,
+            energy_level = track.EnergyLevel,
+            hook_type = TryGetMetadataString(track.Metadata, "hookType"),
+            youtube_description = uploadedTrack.Description ?? TryGetMetadataString(track.Metadata, "youtubeDescription"),
+            playlist_title = playlist.Title,
+            playlist_strategy = playlist.PlaylistStrategy,
+            target_audience = TryGetMetadataString(track.Metadata, "targetAudience"),
+            listening_scenario = TryGetMetadataString(track.Metadata, "listeningScenario")
+                ?? TryGetMetadataString(track.Metadata, "playlistCategory"),
+            channel_voice = "short, sharp, confident, slightly provocative"
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private static string RenderPromptUserTemplate(PromptTemplate template, string inputLabel, string inputJson)
+    {
+        var userPromptTemplate = string.IsNullOrWhiteSpace(template.UserPromptTemplate)
+            ? "{{input_json}}"
+            : template.UserPromptTemplate!;
+
+        return userPromptTemplate
+            .Replace("{{theme}}", inputLabel, StringComparison.Ordinal)
+            .Replace("{{input_label}}", inputLabel, StringComparison.Ordinal)
+            .Replace("{{input_json}}", inputJson, StringComparison.Ordinal);
     }
 }

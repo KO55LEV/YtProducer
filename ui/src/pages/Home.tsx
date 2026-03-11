@@ -36,9 +36,9 @@ const quickLinks = [
     to: "/jobs"
   },
   {
-    title: "Album Templates",
-    description: "Define reusable AI generation templates and inspect returned album JSON.",
-    to: "/album-templates"
+    title: "Prompts",
+    description: "Define reusable LLM prompts, provider settings, and prompt runs for generation and SEO workflows.",
+    to: "/prompts"
   },
   {
     title: "YouTube Playlists",

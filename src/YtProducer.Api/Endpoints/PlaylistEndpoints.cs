@@ -79,6 +79,11 @@ public static class PlaylistEndpoints
             .Produces<SchedulePlaylistAddYoutubeVideosToPlaylistResponse>(StatusCodes.Status201Created)
             .Produces(StatusCodes.Status404NotFound);
 
+        group.MapPost("/{id:guid}/generate-youtube-engagements", SchedulePlaylistGenerateYoutubeEngagementsAsync)
+            .WithName("SchedulePlaylistGenerateYoutubeEngagements")
+            .Produces<SchedulePlaylistGenerateYoutubeEngagementsResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status404NotFound);
+
         group.MapGet("/{id:guid}/media", GetPlaylistMediaAsync)
             .WithName("GetPlaylistMedia")
             .Produces<PlaylistMediaResponse>(StatusCodes.Status200OK);
@@ -961,6 +966,41 @@ public static class PlaylistEndpoints
         return BuildScheduledPlaylistResponse(
             result,
             new SchedulePlaylistAddYoutubeVideosToPlaylistResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
+    }
+
+    private static async Task<IResult> SchedulePlaylistGenerateYoutubeEngagementsAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var playlistExists = await dbContext.Playlists
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == id, cancellationToken);
+
+        if (!playlistExists)
+        {
+            return Results.NotFound(new { message = $"Playlist {id} not found" });
+        }
+
+        var payloadArguments = new CreateGenerateYoutubeEngagementsJobArguments(id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "generate-youtube-engagements",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var result = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.GenerateYoutubeEngagements,
+            TargetType = "playlist",
+            TargetId = id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        return BuildScheduledPlaylistResponse(
+            result,
+            new SchedulePlaylistGenerateYoutubeEngagementsResponse(id, result.Job.Id, result.Job.Type.ToString(), result.Job.Status.ToString()));
     }
 
     private static IResult BuildScheduledPlaylistResponse<TResponse>(JobCreateResult result, TResponse response)

@@ -22,24 +22,36 @@ public sealed class PromptGenerationOutputConfiguration : IEntityTypeConfigurati
 
         builder.Property(x => x.OutputType)
             .HasColumnName("output_type")
-            .HasMaxLength(32)
+            .HasMaxLength(64)
             .IsRequired();
 
-        builder.Property(x => x.RawText)
-            .HasColumnName("raw_text")
+        builder.Property(x => x.OutputLabel)
+            .HasColumnName("output_label")
+            .HasMaxLength(255);
+
+        builder.Property(x => x.OutputText)
+            .HasColumnName("output_text")
             .HasColumnType("text");
 
-        builder.Property(x => x.FormattedJson)
-            .HasColumnName("formatted_json")
+        builder.Property(x => x.OutputJson)
+            .HasColumnName("output_json")
             .HasColumnType("jsonb");
 
-        builder.Property(x => x.IsValidJson)
-            .HasColumnName("is_valid_json")
+        builder.Property(x => x.IsPrimary)
+            .HasColumnName("is_primary")
+            .IsRequired();
+
+        builder.Property(x => x.IsValid)
+            .HasColumnName("is_valid")
             .IsRequired();
 
         builder.Property(x => x.ValidationErrors)
             .HasColumnName("validation_errors")
             .HasColumnType("text");
+
+        builder.Property(x => x.ProviderResponseJson)
+            .HasColumnName("provider_response_json")
+            .HasColumnType("jsonb");
 
         builder.Property(x => x.CreatedAtUtc)
             .HasColumnName("created_at_utc")
@@ -48,5 +60,6 @@ public sealed class PromptGenerationOutputConfiguration : IEntityTypeConfigurati
 
         builder.HasIndex(x => x.PromptGenerationId);
         builder.HasIndex(x => x.CreatedAtUtc);
+        builder.HasIndex(x => x.IsPrimary);
     }
 }

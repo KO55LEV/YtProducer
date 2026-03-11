@@ -6,15 +6,21 @@ public sealed class PromptGenerationOutput
 
     public Guid PromptGenerationId { get; set; }
 
-    public string OutputType { get; set; } = "album_json";
+    public string OutputType { get; set; } = "text";
 
-    public string? RawText { get; set; }
+    public string? OutputLabel { get; set; }
 
-    public string? FormattedJson { get; set; }
+    public string? OutputText { get; set; }
 
-    public bool IsValidJson { get; set; }
+    public string? OutputJson { get; set; }
+
+    public bool IsPrimary { get; set; }
+
+    public bool IsValid { get; set; }
 
     public string? ValidationErrors { get; set; }
+
+    public string? ProviderResponseJson { get; set; }
 
     public DateTimeOffset CreatedAtUtc { get; set; }
 

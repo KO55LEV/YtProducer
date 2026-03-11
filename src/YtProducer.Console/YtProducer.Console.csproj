@@ -23,6 +23,7 @@
     <ProjectReference Include="..\YtProducer.Domain\YtProducer.Domain.csproj" />
     <ProjectReference Include="..\YtProducer.Contracts\YtProducer.Contracts.csproj" />
     <ProjectReference Include="..\YtProducer.Media\YtProducer.Media.csproj" />
+    <ProjectReference Include="..\YtProducer.ReasoningAI\YtProducer.ReasoningAI.csproj" />
   </ItemGroup>
 
 </Project>

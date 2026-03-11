@@ -40,9 +40,29 @@ public static class PromptTemplateEndpoints
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
+        app.MapGet("/prompt-generations", GetAllPromptGenerationsAsync)
+            .WithTags("PromptTemplates")
+            .Produces<IReadOnlyList<PromptGenerationResponse>>(StatusCodes.Status200OK);
+
         app.MapGet("/prompt-generations/{id:guid}", GetPromptGenerationByIdAsync)
             .WithTags("PromptTemplates")
             .Produces<PromptGenerationResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
+        app.MapPut("/prompt-generations/{id:guid}", UpdatePromptGenerationAsync)
+            .WithTags("PromptTemplates")
+            .Produces<PromptGenerationResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        app.MapDelete("/prompt-generations/{id:guid}", DeletePromptGenerationAsync)
+            .WithTags("PromptTemplates")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces(StatusCodes.Status404NotFound);
+
+        app.MapPost("/prompt-generations/{id:guid}/run", SchedulePromptGenerationRunAsync)
+            .WithTags("PromptTemplates")
+            .Produces<SchedulePromptGenerationRunResponse>(StatusCodes.Status201Created)
             .Produces(StatusCodes.Status404NotFound);
 
         app.MapPost("/prompt-generations/{id:guid}/outputs", CreatePromptGenerationOutputAsync)
@@ -51,15 +71,58 @@ public static class PromptTemplateEndpoints
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
+        app.MapPut("/prompt-generation-outputs/{id:guid}", UpdatePromptGenerationOutputAsync)
+            .WithTags("PromptTemplates")
+            .Produces<PromptGenerationOutputResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        app.MapDelete("/prompt-generation-outputs/{id:guid}", DeletePromptGenerationOutputAsync)
+            .WithTags("PromptTemplates")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces(StatusCodes.Status404NotFound);
+
         return app;
     }
 
     private static async Task<IResult> GetPromptTemplatesAsync(
+        string? purpose,
+        string? provider,
+        bool? active,
+        string? search,
         YtProducerDbContext dbContext,
         CancellationToken cancellationToken)
     {
-        var items = await dbContext.PromptTemplates
-            .AsNoTracking()
+        var query = dbContext.PromptTemplates.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(purpose))
+        {
+            var normalizedPurpose = purpose.Trim();
+            query = query.Where(x => x.Category == normalizedPurpose);
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            var normalizedProvider = provider.Trim();
+            query = query.Where(x => x.Provider == normalizedProvider);
+        }
+
+        if (active.HasValue)
+        {
+            query = query.Where(x => x.IsActive == active.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = $"%{search.Trim()}%";
+            query = query.Where(x =>
+                EF.Functions.ILike(x.Name, term) ||
+                EF.Functions.ILike(x.Slug, term) ||
+                EF.Functions.ILike(x.Category, term) ||
+                EF.Functions.ILike(x.Description ?? string.Empty, term));
+        }
+
+        var items = await query
             .OrderBy(x => x.SortOrder)
             .ThenBy(x => x.Name)
             .ToListAsync(cancellationToken);
@@ -106,17 +169,32 @@ public static class PromptTemplateEndpoints
             Id = Guid.NewGuid(),
             Name = request.Name.Trim(),
             Slug = slug,
-            Category = request.Category.Trim(),
+            Category = request.Purpose.Trim(),
             Description = request.Description?.Trim(),
-            TemplateBody = request.TemplateBody,
+            Notes = request.Notes?.Trim(),
+            TemplateBody = ResolveTemplateBody(request),
+            SystemPrompt = NormalizeOptionalText(request.SystemPrompt),
+            UserPromptTemplate = NormalizeOptionalText(request.UserPromptTemplate),
             InputMode = request.InputMode.Trim(),
-            DefaultModel = string.IsNullOrWhiteSpace(request.DefaultModel) ? null : request.DefaultModel.Trim(),
+            Provider = request.Provider.Trim(),
+            DefaultModel = NormalizeOptionalText(request.Model),
+            OutputMode = request.OutputMode.Trim(),
+            SchemaKey = NormalizeOptionalText(request.SchemaKey),
+            SettingsJson = NormalizeJsonPayload(request.SettingsJson),
+            InputContractJson = NormalizeJsonPayload(request.InputContractJson),
+            MetadataJson = NormalizeJsonPayload(request.MetadataJson),
             IsActive = request.IsActive,
+            IsDefault = request.IsDefault,
             SortOrder = request.SortOrder,
             Version = 1,
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };
+
+        if (item.IsDefault)
+        {
+            await ClearExistingDefaultTemplatesAsync(dbContext, item.Category, item.Provider, null, cancellationToken);
+        }
 
         dbContext.PromptTemplates.Add(item);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -152,15 +230,30 @@ public static class PromptTemplateEndpoints
 
         item.Name = request.Name.Trim();
         item.Slug = slug;
-        item.Category = request.Category.Trim();
+        item.Category = request.Purpose.Trim();
         item.Description = request.Description?.Trim();
-        item.TemplateBody = request.TemplateBody;
+        item.Notes = request.Notes?.Trim();
+        item.TemplateBody = ResolveTemplateBody(request);
+        item.SystemPrompt = NormalizeOptionalText(request.SystemPrompt);
+        item.UserPromptTemplate = NormalizeOptionalText(request.UserPromptTemplate);
         item.InputMode = request.InputMode.Trim();
-        item.DefaultModel = string.IsNullOrWhiteSpace(request.DefaultModel) ? null : request.DefaultModel.Trim();
+        item.Provider = request.Provider.Trim();
+        item.DefaultModel = NormalizeOptionalText(request.Model);
+        item.OutputMode = request.OutputMode.Trim();
+        item.SchemaKey = NormalizeOptionalText(request.SchemaKey);
+        item.SettingsJson = NormalizeJsonPayload(request.SettingsJson);
+        item.InputContractJson = NormalizeJsonPayload(request.InputContractJson);
+        item.MetadataJson = NormalizeJsonPayload(request.MetadataJson);
         item.IsActive = request.IsActive;
+        item.IsDefault = request.IsDefault;
         item.SortOrder = request.SortOrder;
         item.Version += 1;
         item.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        if (item.IsDefault)
+        {
+            await ClearExistingDefaultTemplatesAsync(dbContext, item.Category, item.Provider, item.Id, cancellationToken);
+        }
 
         await dbContext.SaveChangesAsync(cancellationToken);
         return Results.Ok(MapTemplate(item));
@@ -193,7 +286,6 @@ public static class PromptTemplateEndpoints
         Guid id,
         PromptGenerationRequest request,
         YtProducerDbContext dbContext,
-        IJobService jobService,
         CancellationToken cancellationToken)
     {
         var template = await dbContext.PromptTemplates
@@ -204,50 +296,82 @@ public static class PromptTemplateEndpoints
             return Results.NotFound();
         }
 
-        if (string.IsNullOrWhiteSpace(request.Theme))
+        if (string.IsNullOrWhiteSpace(request.InputJson))
         {
-            return Results.BadRequest(new { message = "Theme is required." });
+            return Results.BadRequest(new { message = "InputJson is required." });
         }
 
-        var theme = request.Theme.Trim();
-        var inputJson = JsonSerializer.Serialize(new { theme });
-        var resolvedPrompt = $"[SYSTEM PROMPT]\n{template.TemplateBody}\n\n[USER INPUT JSON]\n{inputJson}";
+        if (!TryValidateJsonPayload(request.InputJson, out var inputError))
+        {
+            return Results.BadRequest(new { message = inputError });
+        }
+
+        var inputJson = NormalizeJsonPayload(request.InputJson);
+        var inputLabel = NormalizeOptionalText(request.InputLabel);
         var now = DateTimeOffset.UtcNow;
 
         var item = new PromptGeneration
         {
             Id = Guid.NewGuid(),
             TemplateId = template.Id,
-            Theme = theme,
-            Status = PromptGenerationStatus.Queued,
+            Purpose = template.Category,
+            Provider = template.Provider,
+            Status = PromptGenerationStatus.Draft,
             Model = string.IsNullOrWhiteSpace(request.Model) ? template.DefaultModel : request.Model.Trim(),
+            InputLabel = inputLabel,
             InputJson = inputJson,
-            ResolvedPrompt = resolvedPrompt,
-            CreatedAtUtc = now
+            ResolvedSystemPrompt = NormalizeOptionalText(request.ResolvedSystemPrompt) ?? ResolveSystemPrompt(template),
+            ResolvedUserPrompt = NormalizeOptionalText(request.ResolvedUserPrompt) ?? ResolveUserPrompt(template, inputLabel ?? string.Empty, inputJson),
+            TokenUsageJson = "{}",
+            RunMetadataJson = "{}",
+            TargetType = NormalizeOptionalText(request.TargetType),
+            TargetId = NormalizeOptionalText(request.TargetId),
+            CreatedAtUtc = now,
+            StartedAtUtc = null,
+            FinishedAtUtc = null,
+            ErrorMessage = null
         };
 
         dbContext.PromptGenerations.Add(item);
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        var payloadArguments = new CreatePromptGenerationJobArguments(item.Id);
-        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
-            "generate-album-json",
-            1,
-            JsonSerializer.SerializeToElement(payloadArguments)));
-
-        var result = await jobService.CreateAsync(new Job
-        {
-            Type = JobType.GenerateAlbumJson,
-            TargetType = "prompt_generation",
-            TargetId = item.Id,
-            PayloadJson = payloadJson,
-            MaxRetries = 3
-        }, cancellationToken);
-
-        item.JobId = result.Job.Id;
-        await dbContext.SaveChangesAsync(cancellationToken);
-
         return Results.Created($"/prompt-generations/{item.Id}", MapGeneration(item));
+    }
+
+    private static async Task<IResult> GetAllPromptGenerationsAsync(
+        string? purpose,
+        string? provider,
+        string? status,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var query = dbContext.PromptGenerations
+            .AsNoTracking()
+            .Include(x => x.Outputs)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(purpose))
+        {
+            var normalizedPurpose = purpose.Trim();
+            query = query.Where(x => x.Purpose == normalizedPurpose);
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            var normalizedProvider = provider.Trim();
+            query = query.Where(x => x.Provider == normalizedProvider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(status) && Enum.TryParse<PromptGenerationStatus>(status, true, out var parsedStatus))
+        {
+            query = query.Where(x => x.Status == parsedStatus);
+        }
+
+        var items = await query
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(items.Select(MapGeneration).ToList());
     }
 
     private static async Task<IResult> GetPromptGenerationByIdAsync(
@@ -277,40 +401,225 @@ public static class PromptTemplateEndpoints
             return Results.NotFound();
         }
 
-        if (string.IsNullOrWhiteSpace(request.RawText))
+        if (string.IsNullOrWhiteSpace(request.OutputText) && string.IsNullOrWhiteSpace(request.OutputJson))
         {
-            return Results.BadRequest(new { message = "RawText is required." });
+            return Results.BadRequest(new { message = "Either OutputText or OutputJson is required." });
         }
 
-        var rawText = request.RawText.Trim();
-        var normalizedRawText = NormalizeReturnedJson(rawText);
-        var isValidJson = TryValidateAlbumJson(normalizedRawText, out var formattedJson, out var validationErrors);
-
-        if (!isValidJson)
+        if (!TryValidateJsonPayload(request.OutputJson, out var outputJsonError))
         {
-            return Results.BadRequest(new { message = validationErrors ?? "Album JSON schema is invalid." });
+            return Results.BadRequest(new { message = outputJsonError });
+        }
+
+        if (!TryValidateJsonPayload(request.ProviderResponseJson, out var responseJsonError))
+        {
+            return Results.BadRequest(new { message = responseJsonError });
         }
 
         var output = new PromptGenerationOutput
         {
             Id = Guid.NewGuid(),
             PromptGenerationId = generation.Id,
-            OutputType = string.IsNullOrWhiteSpace(request.OutputType) ? "album_json" : request.OutputType.Trim(),
-            RawText = rawText,
-            FormattedJson = formattedJson,
-            IsValidJson = true,
-            ValidationErrors = null,
+            OutputType = string.IsNullOrWhiteSpace(request.OutputType) ? "text" : request.OutputType.Trim(),
+            OutputLabel = NormalizeOptionalText(request.OutputLabel),
+            OutputText = NormalizeOptionalText(request.OutputText),
+            OutputJson = NormalizeOptionalJsonPayload(request.OutputJson),
+            IsPrimary = request.IsPrimary,
+            IsValid = request.IsValid,
+            ValidationErrors = NormalizeOptionalText(request.ValidationErrors),
+            ProviderResponseJson = NormalizeOptionalJsonPayload(request.ProviderResponseJson),
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
+        if (output.IsPrimary)
+        {
+            foreach (var existingOutput in generation.Outputs)
+            {
+                existingOutput.IsPrimary = false;
+            }
+        }
+
         generation.Outputs.Add(output);
-        generation.Status = PromptGenerationStatus.Completed;
-        generation.FinishedAtUtc = DateTimeOffset.UtcNow;
-        generation.ErrorMessage = null;
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(MapGeneration(generation));
+    }
+
+    private static async Task<IResult> UpdatePromptGenerationAsync(
+        Guid id,
+        PromptGenerationRequest request,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var generation = await dbContext.PromptGenerations.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (generation is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.InputJson))
+        {
+            return Results.BadRequest(new { message = "InputJson is required." });
+        }
+
+        if (!TryValidateJsonPayload(request.InputJson, out var inputError))
+        {
+            return Results.BadRequest(new { message = inputError });
+        }
+
+        var template = await dbContext.PromptTemplates.AsNoTracking().FirstOrDefaultAsync(x => x.Id == generation.TemplateId, cancellationToken);
+        if (template is null)
+        {
+            return Results.BadRequest(new { message = "Prompt template not found." });
+        }
+
+        var inputJson = NormalizeJsonPayload(request.InputJson);
+        var inputLabel = NormalizeOptionalText(request.InputLabel);
+        generation.Model = string.IsNullOrWhiteSpace(request.Model) ? generation.Model : request.Model.Trim();
+        generation.InputLabel = inputLabel;
+        generation.InputJson = inputJson;
+        generation.ResolvedSystemPrompt = NormalizeOptionalText(request.ResolvedSystemPrompt) ?? ResolveSystemPrompt(template);
+        generation.ResolvedUserPrompt = NormalizeOptionalText(request.ResolvedUserPrompt) ?? ResolveUserPrompt(template, inputLabel ?? string.Empty, inputJson);
+        generation.TargetType = NormalizeOptionalText(request.TargetType);
+        generation.TargetId = NormalizeOptionalText(request.TargetId);
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Results.Ok(MapGeneration(generation));
+    }
+
+    private static async Task<IResult> DeletePromptGenerationAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var generation = await dbContext.PromptGenerations.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (generation is null)
+        {
+            return Results.NotFound();
+        }
+
+        dbContext.PromptGenerations.Remove(generation);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> SchedulePromptGenerationRunAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        IJobService jobService,
+        CancellationToken cancellationToken)
+    {
+        var generation = await dbContext.PromptGenerations
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (generation is null)
+        {
+            return Results.NotFound();
+        }
+
+        generation.Status = PromptGenerationStatus.Queued;
+        generation.ErrorMessage = null;
+        generation.StartedAtUtc = null;
+        generation.FinishedAtUtc = null;
+        generation.LatencyMs = null;
+        generation.TokenUsageJson = "{}";
+        generation.RunMetadataJson = "{}";
+
+        var payloadArguments = new CreatePromptGenerationJobArguments(generation.Id);
+        var payloadJson = JsonSerializer.Serialize(new ScheduledCommandPayload(
+            "run-prompt-generation",
+            1,
+            JsonSerializer.SerializeToElement(payloadArguments)));
+
+        var result = await jobService.CreateAsync(new Job
+        {
+            Type = JobType.RunPromptGeneration,
+            TargetType = "prompt_generation",
+            TargetId = generation.Id,
+            PayloadJson = payloadJson,
+            MaxRetries = 3
+        }, cancellationToken);
+
+        generation.JobId = result.Job.Id;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        var response = new SchedulePromptGenerationRunResponse(
+            generation.Id,
+            result.Job.Id,
+            result.Job.Type.ToString(),
+            result.Job.Status.ToString());
+
+        return result.CreatedNew
+            ? Results.Created($"/jobs/{result.Job.Id}", response)
+            : Results.Ok(response);
+    }
+
+    private static async Task<IResult> UpdatePromptGenerationOutputAsync(
+        Guid id,
+        PromptGenerationOutputRequest request,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var output = await dbContext.PromptGenerationOutputs.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (output is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.OutputText) && string.IsNullOrWhiteSpace(request.OutputJson))
+        {
+            return Results.BadRequest(new { message = "Either OutputText or OutputJson is required." });
+        }
+
+        if (!TryValidateJsonPayload(request.OutputJson, out var outputJsonError))
+        {
+            return Results.BadRequest(new { message = outputJsonError });
+        }
+
+        if (!TryValidateJsonPayload(request.ProviderResponseJson, out var responseJsonError))
+        {
+            return Results.BadRequest(new { message = responseJsonError });
+        }
+
+        if (request.IsPrimary)
+        {
+            var siblings = await dbContext.PromptGenerationOutputs
+                .Where(x => x.PromptGenerationId == output.PromptGenerationId && x.Id != output.Id)
+                .ToListAsync(cancellationToken);
+
+            foreach (var sibling in siblings)
+            {
+                sibling.IsPrimary = false;
+            }
+        }
+
+        output.OutputType = string.IsNullOrWhiteSpace(request.OutputType) ? output.OutputType : request.OutputType.Trim();
+        output.OutputLabel = NormalizeOptionalText(request.OutputLabel);
+        output.OutputText = NormalizeOptionalText(request.OutputText);
+        output.OutputJson = NormalizeOptionalJsonPayload(request.OutputJson);
+        output.IsPrimary = request.IsPrimary;
+        output.IsValid = request.IsValid;
+        output.ValidationErrors = NormalizeOptionalText(request.ValidationErrors);
+        output.ProviderResponseJson = NormalizeOptionalJsonPayload(request.ProviderResponseJson);
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Results.Ok(MapOutput(output));
+    }
+
+    private static async Task<IResult> DeletePromptGenerationOutputAsync(
+        Guid id,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var output = await dbContext.PromptGenerationOutputs.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (output is null)
+        {
+            return Results.NotFound();
+        }
+
+        dbContext.PromptGenerationOutputs.Remove(output);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Results.NoContent();
     }
 
     private static string? ValidateTemplateRequest(PromptTemplateRequest request)
@@ -325,14 +634,14 @@ public static class PromptTemplateEndpoints
             return "Slug is required.";
         }
 
-        if (string.IsNullOrWhiteSpace(request.Category))
+        if (string.IsNullOrWhiteSpace(request.Purpose))
         {
-            return "Category is required.";
+            return "Purpose is required.";
         }
 
-        if (string.IsNullOrWhiteSpace(request.TemplateBody))
+        if (string.IsNullOrWhiteSpace(request.SystemPrompt) && string.IsNullOrWhiteSpace(request.UserPromptTemplate))
         {
-            return "Template body is required.";
+            return "At least one prompt body is required.";
         }
 
         if (string.IsNullOrWhiteSpace(request.InputMode))
@@ -340,7 +649,126 @@ public static class PromptTemplateEndpoints
             return "Input mode is required.";
         }
 
+        if (string.IsNullOrWhiteSpace(request.Provider))
+        {
+            return "Provider is required.";
+        }
+
+        if (string.IsNullOrWhiteSpace(request.OutputMode))
+        {
+            return "Output mode is required.";
+        }
+
+        if (!TryValidateJsonPayload(request.SettingsJson, out var settingsError))
+        {
+            return settingsError;
+        }
+
+        if (!TryValidateJsonPayload(request.InputContractJson, out var inputError))
+        {
+            return inputError;
+        }
+
+        if (!TryValidateJsonPayload(request.MetadataJson, out var metadataError))
+        {
+            return metadataError;
+        }
+
         return null;
+    }
+
+    private static async Task ClearExistingDefaultTemplatesAsync(
+        YtProducerDbContext dbContext,
+        string purpose,
+        string provider,
+        Guid? keepId,
+        CancellationToken cancellationToken)
+    {
+        var existingDefaults = await dbContext.PromptTemplates
+            .Where(x => x.Category == purpose && x.Provider == provider && x.IsDefault && (keepId == null || x.Id != keepId.Value))
+            .ToListAsync(cancellationToken);
+
+        foreach (var existingDefault in existingDefaults)
+        {
+            existingDefault.IsDefault = false;
+            existingDefault.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private static string BuildResolvedPrompt(PromptTemplate template, string theme, string inputJson)
+    {
+        var systemPrompt = ResolveSystemPrompt(template);
+        var renderedUserPrompt = ResolveUserPrompt(template, theme, inputJson);
+
+        return $"[SYSTEM PROMPT]\n{systemPrompt}\n\n[USER PROMPT]\n{renderedUserPrompt}";
+    }
+
+    private static string ResolveSystemPrompt(PromptTemplate template)
+    {
+        return string.IsNullOrWhiteSpace(template.SystemPrompt)
+            ? template.TemplateBody
+            : template.SystemPrompt.Trim();
+    }
+
+    private static string ResolveUserPrompt(PromptTemplate template, string inputLabel, string inputJson)
+    {
+        var userPromptTemplate = string.IsNullOrWhiteSpace(template.UserPromptTemplate)
+            ? "{\n  \"input_label\": \"{{input_label}}\",\n  \"input_json\": {{input_json}}\n}"
+            : template.UserPromptTemplate.Trim();
+
+        return userPromptTemplate
+            .Replace("{{theme}}", inputLabel, StringComparison.Ordinal)
+            .Replace("{{input_label}}", inputLabel, StringComparison.Ordinal)
+            .Replace("{{input_json}}", inputJson, StringComparison.Ordinal);
+    }
+
+    private static bool TryValidateJsonPayload(string? rawJson, out string? error)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            error = null;
+            return true;
+        }
+
+        try
+        {
+            using var _ = JsonDocument.Parse(rawJson);
+            error = null;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = $"Invalid JSON payload: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static string NormalizeJsonPayload(string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            return "{}";
+        }
+
+        using var document = JsonDocument.Parse(rawJson);
+        return JsonSerializer.Serialize(document.RootElement);
+    }
+
+    private static string? NormalizeOptionalJsonPayload(string? rawJson)
+    {
+        return string.IsNullOrWhiteSpace(rawJson) ? null : NormalizeJsonPayload(rawJson);
+    }
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string ResolveTemplateBody(PromptTemplateRequest request)
+    {
+        return NormalizeOptionalText(request.SystemPrompt)
+            ?? NormalizeOptionalText(request.UserPromptTemplate)
+            ?? string.Empty;
     }
 
     private static string NormalizeReturnedJson(string rawText)
@@ -360,128 +788,6 @@ public static class PromptTemplateEndpoints
         return normalized;
     }
 
-    private static bool TryValidateAlbumJson(string rawText, out string? formattedJson, out string? validationErrors)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(rawText);
-            formattedJson = JsonSerializer.Serialize(document.RootElement, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-
-            var errors = ValidateAlbumRoot(document.RootElement);
-            validationErrors = errors.Count == 0 ? null : string.Join(" ", errors);
-            return errors.Count == 0;
-        }
-        catch (JsonException ex)
-        {
-            formattedJson = null;
-            validationErrors = ex.Message;
-            return false;
-        }
-    }
-
-    private static List<string> ValidateAlbumRoot(JsonElement root)
-    {
-        var errors = new List<string>();
-        if (root.ValueKind != JsonValueKind.Object)
-        {
-            errors.Add("Root must be a JSON object.");
-            return errors;
-        }
-
-        ValidateRequiredString(root, "theme", errors);
-        ValidateRequiredString(root, "playlist_title", errors);
-        ValidateRequiredString(root, "playlist_description", errors);
-        ValidateRequiredString(root, "playlist_strategy", errors);
-        ValidateRequiredString(root, "target_platform", errors);
-
-        if (!root.TryGetProperty("tracks", out var tracksElement) || tracksElement.ValueKind != JsonValueKind.Array)
-        {
-            errors.Add("tracks must be an array.");
-            return errors;
-        }
-
-        var trackItems = tracksElement.EnumerateArray().ToList();
-        if (trackItems.Count == 0)
-        {
-            errors.Add("tracks must contain at least one item.");
-            return errors;
-        }
-
-        for (var index = 0; index < trackItems.Count; index++)
-        {
-            ValidateTrack(trackItems[index], index, errors);
-        }
-
-        return errors;
-    }
-
-    private static void ValidateTrack(JsonElement track, int index, List<string> errors)
-    {
-        var prefix = $"tracks[{index}]";
-        if (track.ValueKind != JsonValueKind.Object)
-        {
-            errors.Add($"{prefix} must be an object.");
-            return;
-        }
-
-        ValidatePositiveInt(track, "playlist_position", prefix, errors);
-        ValidateRequiredString(track, "title", errors, prefix);
-        ValidateRequiredString(track, "youtube_title", errors, prefix);
-        ValidateRequiredString(track, "style_summary", errors, prefix);
-        ValidatePositiveInt(track, "duration_seconds", prefix, errors);
-        ValidatePositiveInt(track, "tempo_bpm", prefix, errors);
-        ValidateRequiredString(track, "key", errors, prefix);
-        ValidatePositiveInt(track, "energy_level", prefix, errors);
-        ValidateRequiredString(track, "music_generation_prompt", errors, prefix);
-        ValidateRequiredString(track, "image_prompt", errors, prefix);
-        ValidateRequiredString(track, "youtube_description", errors, prefix);
-        ValidateStringArray(track, "youtube_tags", prefix, errors);
-    }
-
-    private static void ValidateRequiredString(JsonElement element, string propertyName, List<string> errors, string? prefix = null)
-    {
-        if (!element.TryGetProperty(propertyName, out var value) ||
-            value.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(value.GetString()))
-        {
-            errors.Add($"{FormatPath(prefix, propertyName)} is required.");
-        }
-    }
-
-    private static void ValidatePositiveInt(JsonElement element, string propertyName, string prefix, List<string> errors)
-    {
-        if (!element.TryGetProperty(propertyName, out var value) ||
-            value.ValueKind != JsonValueKind.Number ||
-            !value.TryGetInt32(out var number) ||
-            number <= 0)
-        {
-            errors.Add($"{FormatPath(prefix, propertyName)} must be a positive integer.");
-        }
-    }
-
-    private static void ValidateStringArray(JsonElement element, string propertyName, string prefix, List<string> errors)
-    {
-        if (!element.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Array)
-        {
-            errors.Add($"{FormatPath(prefix, propertyName)} must be an array of strings.");
-            return;
-        }
-
-        var items = value.EnumerateArray().ToList();
-        if (items.Count == 0 || items.Any(item => item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString())))
-        {
-            errors.Add($"{FormatPath(prefix, propertyName)} must contain at least one non-empty string.");
-        }
-    }
-
-    private static string FormatPath(string? prefix, string propertyName)
-    {
-        return string.IsNullOrWhiteSpace(prefix) ? propertyName : $"{prefix}.{propertyName}";
-    }
-
     private static PromptTemplateResponse MapTemplate(PromptTemplate item)
     {
         return new PromptTemplateResponse(
@@ -490,10 +796,19 @@ public static class PromptTemplateEndpoints
             item.Slug,
             item.Category,
             item.Description,
-            item.TemplateBody,
+            item.Notes,
+            item.SystemPrompt ?? item.TemplateBody,
+            item.UserPromptTemplate,
             item.InputMode,
+            item.Provider,
             item.DefaultModel,
+            item.OutputMode,
+            item.SchemaKey,
+            item.SettingsJson ?? "{}",
+            item.InputContractJson ?? "{}",
+            item.MetadataJson ?? "{}",
             item.IsActive,
+            item.IsDefault,
             item.SortOrder,
             item.Version,
             item.CreatedAtUtc,
@@ -505,12 +820,20 @@ public static class PromptTemplateEndpoints
         return new PromptGenerationResponse(
             item.Id,
             item.TemplateId,
-            item.Theme,
+            item.Purpose,
+            item.Provider,
             item.Status.ToString(),
             item.Model,
+            item.InputLabel,
             item.InputJson,
-            item.ResolvedPrompt,
+            item.ResolvedSystemPrompt,
+            item.ResolvedUserPrompt,
             item.JobId,
+            item.LatencyMs,
+            item.TokenUsageJson,
+            item.RunMetadataJson,
+            item.TargetType,
+            item.TargetId,
             item.CreatedAtUtc,
             item.StartedAtUtc,
             item.FinishedAtUtc,
@@ -527,10 +850,13 @@ public static class PromptTemplateEndpoints
             item.Id,
             item.PromptGenerationId,
             item.OutputType,
-            item.RawText,
-            item.FormattedJson,
-            item.IsValidJson,
+            item.OutputLabel,
+            item.OutputText,
+            item.OutputJson,
+            item.IsPrimary,
+            item.IsValid,
             item.ValidationErrors,
+            item.ProviderResponseJson,
             item.CreatedAtUtc);
     }
 }

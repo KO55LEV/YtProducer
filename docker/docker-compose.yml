@@ -13,6 +13,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - ./postgres/20260309_album_releases.sql:/docker-entrypoint-initdb.d/20260309_album_releases.sql:ro
+      - ./postgres/20260310_prompt_templates_v2.sql:/docker-entrypoint-initdb.d/20260310_prompt_templates_v2.sql:ro
+      - ./postgres/20260310_prompt_runs_reset.sql:/docker-entrypoint-initdb.d/20260310_prompt_runs_reset.sql:ro
+      - ./postgres/20260310_kie_prompt_templates.sql:/docker-entrypoint-initdb.d/20260310_kie_prompt_templates.sql:ro
+      - ./postgres/20260310_youtube_engagement_prompt_templates.sql:/docker-entrypoint-initdb.d/20260310_youtube_engagement_prompt_templates.sql:ro
+      - ./postgres/20260310_youtube_video_engagements.sql:/docker-entrypoint-initdb.d/20260310_youtube_video_engagements.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ytproducer -d ytproducer"]
       interval: 10s

@@ -1,5 +1,11 @@
 namespace YtProducer.Contracts.Prompts;
 
 public sealed record PromptGenerationOutputRequest(
-    string RawText,
-    string? OutputType);
+    string? OutputType,
+    string? OutputLabel,
+    string? OutputText,
+    string? OutputJson,
+    bool IsPrimary,
+    bool IsValid,
+    string? ValidationErrors,
+    string? ProviderResponseJson);

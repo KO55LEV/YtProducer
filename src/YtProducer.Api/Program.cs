@@ -49,8 +49,10 @@ app.MapAlbumReleaseEndpoints();
 app.MapJobEndpoints();
 app.MapLoopEndpoints();
 app.MapPromptTemplateEndpoints();
+app.MapReasoningEndpoints();
 app.MapYoutubePlaylistEndpoints();
 app.MapYoutubeUploadQueueEndpoints();
+app.MapYoutubeVideoEngagementEndpoints();
 app.MapYoutubePublishingEndpoints();
 
 app.Run();

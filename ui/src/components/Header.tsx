@@ -11,10 +11,10 @@ export default function Header() {
         <nav className="nav">
           <Link to="/" className="nav-link">Home</Link>
           <Link to="/playlists" className="nav-link">Playlists</Link>
-          <Link to="/album-templates" className="nav-link">Album Templates</Link>
+          <Link to="/prompts" className="nav-link">Prompts</Link>
+          <Link to="/youtube-engagements" className="nav-link">Engagements</Link>
           <Link to="/create-loop" className="nav-link">Create Loop</Link>
           <Link to="/jobs" className="nav-link">Jobs</Link>
-          <Link to="/youtube-playlists" className="nav-link">YouTube Playlists</Link>
         </nav>
       </div>
     </header>

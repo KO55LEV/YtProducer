@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\YtProducer.Domain\YtProducer.Domain.csproj" />
+    <ProjectReference Include="..\YtProducer.ReasoningAI\YtProducer.ReasoningAI.csproj" />
   </ItemGroup>
 
   <ItemGroup>

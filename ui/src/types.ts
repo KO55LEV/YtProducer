@@ -119,12 +119,21 @@ export type PromptTemplate = {
   id: string;
   name: string;
   slug: string;
-  category: string;
+  purpose: string;
   description?: string | null;
-  templateBody: string;
+  notes?: string | null;
+  systemPrompt?: string | null;
+  userPromptTemplate?: string | null;
   inputMode: string;
-  defaultModel?: string | null;
+  provider: string;
+  model?: string | null;
+  outputMode: string;
+  schemaKey?: string | null;
+  settingsJson: string;
+  inputContractJson: string;
+  metadataJson: string;
   isActive: boolean;
+  isDefault: boolean;
   sortOrder: number;
   version: number;
   createdAtUtc: string;
@@ -135,27 +144,45 @@ export type PromptGenerationOutput = {
   id: string;
   promptGenerationId: string;
   outputType: string;
-  rawText?: string | null;
-  formattedJson?: string | null;
-  isValidJson: boolean;
+  outputLabel?: string | null;
+  outputText?: string | null;
+  outputJson?: string | null;
+  isPrimary: boolean;
+  isValid: boolean;
   validationErrors?: string | null;
+  providerResponseJson?: string | null;
   createdAtUtc: string;
 };
 
 export type PromptGeneration = {
   id: string;
   templateId: string;
-  theme: string;
+  purpose: string;
+  provider: string;
   status: string;
   model?: string | null;
+  inputLabel?: string | null;
   inputJson: string;
-  resolvedPrompt: string;
+  resolvedSystemPrompt: string;
+  resolvedUserPrompt: string;
   jobId?: string | null;
+  latencyMs?: number | null;
+  tokenUsageJson?: string | null;
+  runMetadataJson?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
   createdAtUtc: string;
   startedAtUtc?: string | null;
   finishedAtUtc?: string | null;
   errorMessage?: string | null;
   outputs: PromptGenerationOutput[];
+};
+
+export type SchedulePromptGenerationRunResponse = {
+  promptGenerationId: string;
+  jobId: string;
+  jobType: string;
+  jobStatus: string;
 };
 
 export type TrackVideoGeneration = {
@@ -282,4 +309,27 @@ export type JobLog = {
   message: string;
   metadata?: string | null;
   createdAtUtc: string;
+};
+
+export type YoutubeVideoEngagement = {
+  id: string;
+  channelId: string;
+  youtubeVideoId: string;
+  trackId?: string | null;
+  playlistId?: string | null;
+  albumReleaseId?: string | null;
+  engagementType: string;
+  promptTemplateId?: string | null;
+  promptGenerationId?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  generatedText?: string | null;
+  finalText?: string | null;
+  status: string;
+  youtubeCommentId?: string | null;
+  postedAtUtc?: string | null;
+  errorMessage?: string | null;
+  metadataJson: string;
+  createdAtUtc: string;
+  updatedAtUtc: string;
 };

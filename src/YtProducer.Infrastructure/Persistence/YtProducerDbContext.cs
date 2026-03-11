@@ -42,6 +42,8 @@ public sealed class YtProducerDbContext : DbContext
 
     public DbSet<PromptGenerationOutput> PromptGenerationOutputs => Set<PromptGenerationOutput>();
 
+    public DbSet<YoutubeVideoEngagement> YoutubeVideoEngagements => Set<YoutubeVideoEngagement>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(YtProducerDbContext).Assembly);
