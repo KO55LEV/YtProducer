@@ -2355,6 +2355,56 @@ a.playlist-action-btn {
   margin-top: -0.15rem;
 }
 
+.playlist-jobs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.playlist-jobs-header h3 {
+  margin: 0;
+}
+
+.playlist-jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.playlist-job-item {
+  display: block;
+  padding: 0.8rem 0.95rem;
+  border-radius: 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  text-decoration: none;
+  color: inherit;
+}
+
+.playlist-job-item:hover {
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(125, 211, 252, 0.06);
+}
+
+.playlist-job-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.playlist-job-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
 .playlist-profile-picker {
   display: flex;
   flex-direction: column;
@@ -3477,6 +3527,15 @@ a.playlist-action-btn {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(0, 0, 0, 0.28);
   min-height: 0;
+}
+
+.album-release-cover-trigger {
+  padding: 0;
+  cursor: zoom-in;
+}
+
+.album-release-cover-trigger:hover {
+  border-color: rgba(125, 211, 252, 0.35);
 }
 
 .album-release-cover-generated img {

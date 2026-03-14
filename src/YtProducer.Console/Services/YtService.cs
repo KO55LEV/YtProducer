@@ -239,6 +239,8 @@ public class YtService
         try
         {
             var result = await ProcessScheduledJobAsync(job);
+            await ThrowIfJobCancelledAsync(job.Id);
+
             job.Status = JobStatus.Completed;
             job.Progress = 100;
             job.ResultJson = result;
@@ -250,6 +252,42 @@ public class YtService
             await AppendJobLogAsync(job.Id, "Info", "Job completed successfully.", result);
             global::System.Console.WriteLine($"process-job complete id={job.Id} type={job.Type}");
             return true;
+        }
+        catch (OperationCanceledException ex)
+        {
+            if (await IsJobCancelledAsync(job.Id))
+            {
+                _context.ChangeTracker.Clear();
+
+                var cancelledJob = await _context.Jobs.FirstOrDefaultAsync(x => x.Id == job.Id);
+                if (cancelledJob != null)
+                {
+                    cancelledJob.Status = JobStatus.Cancelled;
+                    cancelledJob.ErrorCode = "Cancelled";
+                    cancelledJob.ErrorMessage = ex.Message;
+                    cancelledJob.FinishedAt = DateTimeOffset.UtcNow;
+                    cancelledJob.LastHeartbeat = cancelledJob.FinishedAt;
+                    cancelledJob.LeaseExpiresAt = null;
+                    await _context.SaveChangesAsync();
+                }
+
+                await AppendJobLogAsync(job.Id, "Warning", $"Job cancelled: {ex.Message}");
+                global::System.Console.WriteLine($"process-job cancelled id={job.Id}");
+                return false;
+            }
+
+            await MarkJobTargetFailedAsync(job, ex.Message);
+            job.Status = JobStatus.Failed;
+            job.ErrorCode = "OperationCancelled";
+            job.ErrorMessage = ex.Message;
+            job.FinishedAt = DateTimeOffset.UtcNow;
+            job.LastHeartbeat = job.FinishedAt;
+            job.LeaseExpiresAt = null;
+            await _context.SaveChangesAsync();
+
+            await AppendJobLogAsync(job.Id, "Error", $"Job cancelled unexpectedly: {ex.Message}");
+            global::System.Console.WriteLine($"process-job failed id={job.Id} error={ex.Message}");
+            return false;
         }
         catch (Exception ex)
         {
@@ -276,6 +314,29 @@ public class YtService
             catch (OperationCanceledException)
             {
             }
+        }
+    }
+
+    private async Task<bool> IsJobCancelledAsync(Guid jobId)
+    {
+        return await _context.Jobs
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == jobId && x.Status == JobStatus.Cancelled);
+    }
+
+    private async Task ThrowIfJobCancelledAsync(Guid? jobId)
+    {
+        if (!jobId.HasValue)
+        {
+            return;
+        }
+
+        var cancelled = await _context.Jobs
+            .AsNoTracking()
+            .AnyAsync(x => x.Id == jobId.Value && x.Status == JobStatus.Cancelled);
+        if (cancelled)
+        {
+            throw new OperationCanceledException($"Job {jobId.Value} was cancelled.");
         }
     }
 
@@ -717,7 +778,12 @@ public class YtService
         }
 
         await AppendJobLogAsync(job.Id, "Info", $"Generate all images started playlist_id={arguments.PlaylistId}");
-        await RunGenerateAllImagesAsync(new[] { arguments.PlaylistId.ToString() });
+        var succeeded = await RunGenerateAllImagesAsync(new[] { arguments.PlaylistId.ToString() }, job.Id);
+        if (!succeeded)
+        {
+            throw new InvalidOperationException($"Generate all images failed playlist_id={arguments.PlaylistId}");
+        }
+
         await AppendJobLogAsync(job.Id, "Info", $"Generate all images completed playlist_id={arguments.PlaylistId}");
 
         return JsonSerializer.Serialize(new
@@ -4843,18 +4909,18 @@ public class YtService
         await GenerateMusicForPositionAsync(playlistId, position);
     }
 
-    public async Task RunGenerateAllImagesAsync(string[] commandArgs)
+    public async Task<bool> RunGenerateAllImagesAsync(string[] commandArgs, Guid? jobId = null)
     {
         if (commandArgs.Length < 1)
         {
             global::System.Console.WriteLine("Usage: generate-all-images <playlistId>");
-            return;
+            return false;
         }
 
         if (!Guid.TryParse(commandArgs[0], out var playlistId))
         {
             global::System.Console.WriteLine("Invalid playlistId.");
-            return;
+            return false;
         }
 
         var positions = await _context.Tracks
@@ -4868,23 +4934,28 @@ public class YtService
         if (positions.Count == 0)
         {
             global::System.Console.WriteLine("No tracks found for playlist.");
-            return;
+            return false;
         }
 
         var allSucceeded = true;
         foreach (var position in positions)
         {
+            await ThrowIfJobCancelledAsync(jobId);
             var success = await GenerateImageForPositionAsync(playlistId, position, "grok-imagine/text-to-image");
             if (!success)
             {
                 allSucceeded = false;
             }
+
+            await ThrowIfJobCancelledAsync(jobId);
         }
 
         if (allSucceeded)
         {
             await SetPlaylistStatusAsync(playlistId, PlaylistStatus.ImagesGenerated);
         }
+
+        return allSucceeded;
     }
 
     public async Task RunGenerateAllMusicAsync(string[] commandArgs)
@@ -6309,8 +6380,9 @@ public class YtService
 
         var scenario = TryGetMetadataString(track.Metadata, "listeningScenario")
             ?? TryGetMetadataString(track.Metadata, "playlistCategory")
+            ?? playlist.Theme
             ?? TryGetMetadataString(playlist.Metadata, "playlistCategory")
-            ?? "workout";
+            ?? string.Empty;
 
         var musicPrompt = TryGetMetadataString(track.Metadata, "musicGenerationPrompt")
             ?? TryGetMetadataString(playlist.Metadata, "musicGenerationPrompt");
@@ -6320,10 +6392,12 @@ public class YtService
         var scenarioToken = NormalizeHeadline(scenario);
         if (!string.IsNullOrWhiteSpace(subgenre))
         {
-            return $"{NormalizeHeadline(subgenre)} {scenarioToken}";
+            return string.IsNullOrWhiteSpace(scenarioToken)
+                ? NormalizeHeadline(subgenre)
+                : $"{NormalizeHeadline(subgenre)} {scenarioToken}";
         }
 
-        return $"WORKOUT {scenarioToken}";
+        return scenarioToken;
     }
 
     private static string ResolveThumbnailHeadlineFont(string? envFont, string? visualStyleHint)

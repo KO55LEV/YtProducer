@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import type { Playlist, PlaylistMediaResponse, PlaylistTrackMedia, YoutubeVideoEngagement } from "../types";
+import type {
+  Playlist,
+  PlaylistMediaResponse,
+  PlaylistTrackMedia,
+  ScheduleYoutubeVideoEngagementPostResponse,
+  YoutubeVideoEngagement
+} from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -97,6 +103,7 @@ export default function YoutubeEngagementsPage() {
   const [savingMessage, setSavingMessage] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [postingById, setPostingById] = useState<Record<string, boolean>>({});
+  const [scheduledPostJobById, setScheduledPostJobById] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void fetchEngagements();
@@ -130,6 +137,16 @@ export default function YoutubeEngagementsPage() {
 
       const data = (await engagementsResponse.json()) as YoutubeVideoEngagement[];
       setEngagements(data);
+      setScheduledPostJobById((current) => {
+        const next = { ...current };
+        for (const item of data) {
+          if (item.youtubeCommentId) {
+            delete next[item.id];
+          }
+        }
+
+        return next;
+      });
 
       if (playlistResponse?.ok) {
         setPlaylist((await playlistResponse.json()) as Playlist);
@@ -281,7 +298,12 @@ export default function YoutubeEngagementsPage() {
         throw new Error(`Post scheduling failed with status ${response.status}`);
       }
 
-      await fetchEngagements();
+      const scheduled = (await response.json()) as ScheduleYoutubeVideoEngagementPostResponse;
+      setScheduledPostJobById((current) => ({
+        ...current,
+        [engagementId]: scheduled.jobId
+      }));
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to schedule comment posting");
     } finally {
@@ -378,6 +400,8 @@ export default function YoutubeEngagementsPage() {
                         (typeof metadata?.playlistPosition === "number" ? metadata.playlistPosition : null);
                       const media = playlistPosition ? mediaByPosition[playlistPosition] : null;
                       const imageUrl = pickTrackImage(media);
+                      const scheduledPostJobId = scheduledPostJobById[item.id];
+                      const hasScheduledPost = typeof scheduledPostJobId === "string" && scheduledPostJobId.length > 0;
                       const trackTitle =
                         sourceTrack?.title ??
                         readStringField(metadata, "trackTitle") ??
@@ -462,7 +486,7 @@ export default function YoutubeEngagementsPage() {
                         <strong>{item.youtubeCommentId ? truncateMiddle(item.youtubeCommentId, 18) : "—"}</strong>
                         <span>{item.postedAtUtc ? formatDate(item.postedAtUtc) : "Not posted"}</span>
                         <p>{item.errorMessage ?? "—"}</p>
-                        {!item.youtubeCommentId && item.finalText && item.status.toLowerCase() !== "posted" ? (
+                        {!item.youtubeCommentId && item.finalText && item.status.toLowerCase() !== "posted" && !hasScheduledPost ? (
                           <button
                             type="button"
                             className="prompt-inline-action"
@@ -471,6 +495,11 @@ export default function YoutubeEngagementsPage() {
                           >
                             {postingById[item.id] === true ? "Posting..." : "Post"}
                           </button>
+                        ) : null}
+                        {!item.youtubeCommentId && hasScheduledPost ? (
+                          <Link className="prompt-inline-action" to="/jobs" title={scheduledPostJobId}>
+                            Posted
+                          </Link>
                         ) : null}
                       </div>
                     </td>

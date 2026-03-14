@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -59,7 +60,7 @@ public class JobService : IJobService
         var existing = await _context.Jobs
             .FirstOrDefaultAsync(x => x.IdempotencyKey != null && x.IdempotencyKey == job.IdempotencyKey, cancellationToken);
 
-        if (existing is not null)
+        if (existing is not null && !IsTerminalStatus(existing.Status))
         {
             return new JobCreateResult(existing, false);
         }
@@ -72,7 +73,24 @@ public class JobService : IJobService
         job.MaxRetries = Math.Max(job.MaxRetries, 1);
 
         _context.Jobs.Add(job);
-        await _context.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (IsDuplicateIdempotencyViolation(ex))
+        {
+            _context.Entry(job).State = EntityState.Detached;
+
+            var existingAfterConflict = await _context.Jobs
+                .FirstOrDefaultAsync(x => x.IdempotencyKey != null && x.IdempotencyKey == job.IdempotencyKey, cancellationToken);
+
+            if (existingAfterConflict is not null)
+            {
+                return new JobCreateResult(existingAfterConflict, false);
+            }
+
+            throw;
+        }
 
         _logger.LogInformation("Created job {JobId} type {JobType} target {TargetType}:{TargetId}", 
             job.Id, job.Type, job.TargetType, job.TargetId);
@@ -297,5 +315,17 @@ FOR UPDATE SKIP LOCKED")
         }
 
         return normalized;
+    }
+
+    private static bool IsTerminalStatus(JobStatus status)
+    {
+        return status is JobStatus.Completed or JobStatus.Failed or JobStatus.Cancelled;
+    }
+
+    private static bool IsDuplicateIdempotencyViolation(DbUpdateException exception)
+    {
+        return exception.InnerException is PostgresException postgresException
+            && postgresException.SqlState == PostgresErrorCodes.UniqueViolation
+            && string.Equals(postgresException.ConstraintName, "idx_jobs_idempotency", StringComparison.OrdinalIgnoreCase);
     }
 }

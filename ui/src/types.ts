@@ -333,3 +333,10 @@ export type YoutubeVideoEngagement = {
   createdAtUtc: string;
   updatedAtUtc: string;
 };
+
+export type ScheduleYoutubeVideoEngagementPostResponse = {
+  youtubeVideoEngagementId: string;
+  jobId: string;
+  jobType: string;
+  jobStatus: string;
+};

@@ -24,6 +24,7 @@ export default function AlbumReleasePage() {
   const { id } = useParams<{ id: string }>();
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
   const [albumRelease, setAlbumRelease] = useState<AlbumRelease | null>(null);
+  const [coverLightboxOpen, setCoverLightboxOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(true);
@@ -264,9 +265,14 @@ export default function AlbumReleasePage() {
         <div className="album-release-cover-shell">
           <div className="album-release-cover">
             {generatedThumbnailUrl ? (
-              <div className="album-release-cover-generated">
+              <button
+                type="button"
+                className="album-release-cover-generated album-release-cover-trigger"
+                onClick={() => setCoverLightboxOpen(true)}
+                aria-label="Open album thumbnail preview"
+              >
                 <img src={generatedThumbnailUrl} alt={`${title} thumbnail`} />
-              </div>
+              </button>
             ) : (
               <div className="album-release-cover-empty">
                 <span>No album thumbnail generated yet</span>
@@ -294,6 +300,27 @@ export default function AlbumReleasePage() {
           </div>
         </div>
       </section>
+
+      {coverLightboxOpen && generatedThumbnailUrl && (
+        <div className="media-lightbox" role="dialog" aria-modal="true" onClick={() => setCoverLightboxOpen(false)}>
+          <div className="media-lightbox-content" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="media-lightbox-close"
+              onClick={() => setCoverLightboxOpen(false)}
+              aria-label="Close album thumbnail preview"
+            >
+              ×
+            </button>
+            <img
+              className="media-lightbox-image"
+              src={generatedThumbnailUrl}
+              alt={`${title} full preview`}
+              onClick={() => setCoverLightboxOpen(false)}
+            />
+          </div>
+        </div>
+      )}
 
       <section className="album-release-layout">
         <div className="album-release-main">

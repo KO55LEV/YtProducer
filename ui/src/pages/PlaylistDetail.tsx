@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type {
+  Job,
   Playlist,
   PlaylistMediaResponse,
   PlaylistPromptResponse,
@@ -107,6 +108,8 @@ export default function PlaylistDetail() {
   const [copiedPromptPosition, setCopiedPromptPosition] = useState<number | null>(null);
   const [selectedPlaylistStatus, setSelectedPlaylistStatus] = useState<string>("Draft");
   const [updatePlaylistStatusBusy, setUpdatePlaylistStatusBusy] = useState(false);
+  const [playlistJobs, setPlaylistJobs] = useState<Job[]>([]);
+  const [playlistJobsLoading, setPlaylistJobsLoading] = useState(false);
 
   const resolveMediaUrl = useMemo(() => {
     return (url: string) => (url.startsWith("http") ? url : `${apiBaseUrl}${url}`);
@@ -180,12 +183,45 @@ export default function PlaylistDetail() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [lightboxState, mediaByPosition, showThumbnail]);
 
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    void loadPlaylistJobs();
+  }, [id]);
+
   async function reloadMedia(): Promise<void> {
     if (!id) return;
     try {
       await Promise.all([reloadMediaFiles(), reloadVideoGenerations()]);
     } catch {
       // Keep existing media state when refresh fails.
+    }
+  }
+
+  async function loadPlaylistJobs(): Promise<void> {
+    if (!id) {
+      return;
+    }
+
+    try {
+      setPlaylistJobsLoading(true);
+      const response = await fetch(`${apiBaseUrl}/jobs`);
+      if (!response.ok) {
+        throw new Error(`Jobs request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as Job[];
+      const filtered = data
+        .filter((job) => job.targetType?.toLowerCase() === "playlist" && job.targetId === id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 8);
+      setPlaylistJobs(filtered);
+    } catch {
+      // Leave existing jobs visible if refresh fails.
+    } finally {
+      setPlaylistJobsLoading(false);
     }
   }
 
@@ -457,6 +493,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setGenerateImagesJobId(data.jobId);
+      await loadPlaylistJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generate images failed");
     } finally {
@@ -481,6 +518,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setGenerateMusicJobId(data.jobId);
+      await loadPlaylistJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generate music failed");
     } finally {
@@ -505,6 +543,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setGenerateThumbnailsJobId(data.jobId);
+      await loadPlaylistJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generate thumbnails failed");
     } finally {
@@ -533,6 +572,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setGenerateVideosJobId(data.jobId);
+      await loadPlaylistJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generate videos failed");
     } finally {
@@ -557,6 +597,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setGenerateYoutubePlaylistJobId(data.jobId);
+      await loadPlaylistJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create playlist failed");
     } finally {
@@ -581,6 +622,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setUploadYoutubeVideosJobId(data.jobId);
+      await loadPlaylistJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload videos failed");
     } finally {
@@ -605,6 +647,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setAddYoutubeVideosToPlaylistJobId(data.jobId);
+      await loadPlaylistJobs();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Add videos to playlist failed");
     } finally {
@@ -629,6 +672,7 @@ export default function PlaylistDetail() {
 
       const data = (await response.json()) as { jobId: string };
       setGenerateYoutubeEngagementsJobId(data.jobId);
+      await loadPlaylistJobs();
       navigate(`/youtube-engagements?playlistId=${id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generate engagements failed");
@@ -1354,7 +1398,35 @@ export default function PlaylistDetail() {
         </div>
       </div>
 
-      <div className="additional-info">
+        <div className="additional-info">
+        <div className="info-card">
+          <div className="playlist-jobs-header">
+            <h3>Recent Jobs</h3>
+            <button type="button" className="playlist-meta-btn" onClick={() => void loadPlaylistJobs()} disabled={playlistJobsLoading}>
+              {playlistJobsLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+          {playlistJobs.length === 0 ? (
+            <p>{playlistJobsLoading ? "Loading jobs..." : "No playlist jobs visible yet."}</p>
+          ) : (
+            <div className="playlist-jobs-list">
+              {playlistJobs.map((job) => (
+                <Link key={job.id} to="/jobs" className="playlist-job-item">
+                  <div className="playlist-job-row">
+                    <strong>{job.type}</strong>
+                    <span className={`badge badge-${job.status.toLowerCase() === "completed" ? "success" : job.status.toLowerCase() === "failed" ? "error" : job.status.toLowerCase() === "running" ? "active" : "pending"}`}>
+                      {job.status}
+                    </span>
+                  </div>
+                  <div className="playlist-job-meta">
+                    <span>{new Date(job.createdAt).toLocaleString()}</span>
+                    <span>{job.progress}%</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="info-card">
           <h3>Production Pipeline</h3>
           <p>Track generation and video rendering status will appear here.</p>

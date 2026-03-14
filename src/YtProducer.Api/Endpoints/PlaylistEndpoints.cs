@@ -742,6 +742,7 @@ public static class PlaylistEndpoints
             TargetType = "playlist",
             TargetId = id,
             PayloadJson = payloadJson,
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
             MaxRetries = 3
         }, cancellationToken);
 
@@ -777,6 +778,7 @@ public static class PlaylistEndpoints
             TargetType = "playlist",
             TargetId = id,
             PayloadJson = payloadJson,
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
             MaxRetries = 3
         }, cancellationToken);
 
@@ -812,6 +814,7 @@ public static class PlaylistEndpoints
             TargetType = "playlist",
             TargetId = id,
             PayloadJson = payloadJson,
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
             MaxRetries = 3
         }, cancellationToken);
 
