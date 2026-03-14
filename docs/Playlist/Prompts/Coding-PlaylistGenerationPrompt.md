@@ -74,7 +74,7 @@ Generate music_generation_prompt instructions optimized for AI music generation 
 
 Music must be instrumental focus music suitable for coding, programming and productivity with hi-fi modern production quality.
 
-The prompt must describe the music in rich detail (150-200 words).
+The prompt must describe the music in rich detail (max 1000 chars).
 
 Each prompt must include:
 

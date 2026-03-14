@@ -1693,6 +1693,7 @@ public static class PlaylistEndpoints
             item.FilePath,
             item.Status,
             item.Metadata,
+            item.ScheduledPublishAtUtc,
             item.CreatedAtUtc)).ToList();
 
         return Results.Ok(response);

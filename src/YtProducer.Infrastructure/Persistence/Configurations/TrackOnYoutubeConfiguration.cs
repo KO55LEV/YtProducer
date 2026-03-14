@@ -61,6 +61,9 @@ public sealed class TrackOnYoutubeConfiguration : IEntityTypeConfiguration<Track
             .HasColumnName("metadata")
             .HasColumnType("jsonb");
 
+        builder.Property(x => x.ScheduledPublishAtUtc)
+            .HasColumnName("scheduled_publish_at_utc");
+
         builder.Property(x => x.CreatedAtUtc)
             .HasColumnName("created_at_utc")
             .IsRequired()

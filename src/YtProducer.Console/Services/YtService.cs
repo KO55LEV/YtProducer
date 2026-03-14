@@ -5886,8 +5886,10 @@ public class YtService
                 categoryId = uploadMetadata.CategoryId,
                 defaultLanguage = uploadMetadata.DefaultLanguage,
                 defaultAudioLanguage = uploadMetadata.DefaultAudioLanguage,
-                madeForKids = uploadMetadata.MadeForKids
+                madeForKids = uploadMetadata.MadeForKids,
+                scheduledPublishAtUtc = publishAt
             }),
+            ScheduledPublishAtUtc = publishAt,
             CreatedAtUtc = DateTimeOffset.UtcNow
         };
 
@@ -5919,6 +5921,7 @@ public class YtService
                     defaultLanguage = uploadMetadata.DefaultLanguage,
                     defaultAudioLanguage = uploadMetadata.DefaultAudioLanguage,
                     madeForKids = uploadMetadata.MadeForKids,
+                    scheduledPublishAtUtc = publishAt,
                     youtubePlaylistId,
                     addedToPlaylist = true
                 });

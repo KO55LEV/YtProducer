@@ -26,5 +26,7 @@ public sealed class TrackOnYoutube
 
     public string? Metadata { get; set; }
 
+    public DateTimeOffset? ScheduledPublishAtUtc { get; set; }
+
     public DateTimeOffset CreatedAtUtc { get; set; }
 }

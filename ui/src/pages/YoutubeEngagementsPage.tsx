@@ -5,6 +5,7 @@ import type {
   PlaylistMediaResponse,
   PlaylistTrackMedia,
   ScheduleYoutubeVideoEngagementPostResponse,
+  TrackOnYoutube,
   YoutubeVideoEngagement
 } from "../types";
 
@@ -92,6 +93,7 @@ export default function YoutubeEngagementsPage() {
   const [engagements, setEngagements] = useState<YoutubeVideoEngagement[]>([]);
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
   const [mediaByPosition, setMediaByPosition] = useState<Record<number, PlaylistTrackMedia>>({});
+  const [youtubeVideoByTrackId, setYoutubeVideoByTrackId] = useState<Record<string, TrackOnYoutube>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -124,11 +126,15 @@ export default function YoutubeEngagementsPage() {
       const mediaPromise = playlistIdParam
         ? fetch(`${apiBaseUrl}/playlists/${playlistIdParam}/media`)
         : Promise.resolve<Response | null>(null);
+      const youtubeVideosPromise = playlistIdParam
+        ? fetch(`${apiBaseUrl}/playlists/${playlistIdParam}/youtube-videos`)
+        : Promise.resolve<Response | null>(null);
 
-      const [engagementsResponse, playlistResponse, mediaResponse] = await Promise.all([
+      const [engagementsResponse, playlistResponse, mediaResponse, youtubeVideosResponse] = await Promise.all([
         engagementsPromise,
         playlistPromise,
-        mediaPromise
+        mediaPromise,
+        youtubeVideosPromise
       ]);
 
       if (!engagementsResponse.ok) {
@@ -163,6 +169,27 @@ export default function YoutubeEngagementsPage() {
         setMediaByPosition(mediaMap);
       } else {
         setMediaByPosition({});
+      }
+
+      if (youtubeVideosResponse?.ok) {
+        const youtubeVideos = (await youtubeVideosResponse.json()) as TrackOnYoutube[];
+        const youtubeVideoMap: Record<string, TrackOnYoutube> = {};
+        for (const item of youtubeVideos) {
+          const current = youtubeVideoMap[item.trackId];
+          if (!current) {
+            youtubeVideoMap[item.trackId] = item;
+            continue;
+          }
+
+          const currentCreated = new Date(current.createdAtUtc).getTime();
+          const candidateCreated = new Date(item.createdAtUtc).getTime();
+          if (Number.isNaN(currentCreated) || candidateCreated > currentCreated) {
+            youtubeVideoMap[item.trackId] = item;
+          }
+        }
+        setYoutubeVideoByTrackId(youtubeVideoMap);
+      } else {
+        setYoutubeVideoByTrackId({});
       }
 
       setError(null);
@@ -399,9 +426,15 @@ export default function YoutubeEngagementsPage() {
                         sourceTrack?.playlistPosition ??
                         (typeof metadata?.playlistPosition === "number" ? metadata.playlistPosition : null);
                       const media = playlistPosition ? mediaByPosition[playlistPosition] : null;
+                      const youtubeVideo = item.trackId ? youtubeVideoByTrackId[item.trackId] : null;
+                      const scheduledPublishAtUtc = youtubeVideo?.scheduledPublishAtUtc ?? null;
                       const imageUrl = pickTrackImage(media);
                       const scheduledPostJobId = scheduledPostJobById[item.id];
                       const hasScheduledPost = typeof scheduledPostJobId === "string" && scheduledPostJobId.length > 0;
+                      const isVideoPublished =
+                        !scheduledPublishAtUtc ||
+                        Number.isNaN(new Date(scheduledPublishAtUtc).getTime()) ||
+                        new Date(scheduledPublishAtUtc).getTime() <= Date.now();
                       const trackTitle =
                         sourceTrack?.title ??
                         readStringField(metadata, "trackTitle") ??
@@ -486,7 +519,7 @@ export default function YoutubeEngagementsPage() {
                         <strong>{item.youtubeCommentId ? truncateMiddle(item.youtubeCommentId, 18) : "—"}</strong>
                         <span>{item.postedAtUtc ? formatDate(item.postedAtUtc) : "Not posted"}</span>
                         <p>{item.errorMessage ?? "—"}</p>
-                        {!item.youtubeCommentId && item.finalText && item.status.toLowerCase() !== "posted" && !hasScheduledPost ? (
+                        {!item.youtubeCommentId && item.finalText && item.status.toLowerCase() !== "posted" && !hasScheduledPost && isVideoPublished ? (
                           <button
                             type="button"
                             className="prompt-inline-action"
@@ -500,6 +533,11 @@ export default function YoutubeEngagementsPage() {
                           <Link className="prompt-inline-action" to="/jobs" title={scheduledPostJobId}>
                             Posted
                           </Link>
+                        ) : null}
+                        {!item.youtubeCommentId && item.finalText && item.status.toLowerCase() !== "posted" && !hasScheduledPost && !isVideoPublished ? (
+                          <span className="prompt-engagement-wait-text" title={scheduledPublishAtUtc ?? undefined}>
+                            Wait video is not published yet
+                          </span>
                         ) : null}
                       </div>
                     </td>

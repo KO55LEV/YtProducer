@@ -259,6 +259,23 @@ export type ScheduleTrackLoopResponse = {
   loop: TrackLoop;
 };
 
+export type TrackOnYoutube = {
+  id: string;
+  trackId: string;
+  playlistId: string;
+  playlistPosition: number;
+  videoId: string;
+  url?: string | null;
+  title?: string | null;
+  description?: string | null;
+  privacy?: string | null;
+  filePath?: string | null;
+  status?: string | null;
+  metadata?: string | null;
+  scheduledPublishAtUtc?: string | null;
+  createdAtUtc: string;
+};
+
 export type YoutubePlaylist = {
   id: string;
   youtubePlaylistId: string;

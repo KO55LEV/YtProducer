@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS track_on_youtube (
     file_path varchar(2000),
     status varchar(32),
     metadata jsonb,
+    scheduled_publish_at_utc timestamptz,
     created_at_utc timestamptz NOT NULL DEFAULT NOW()
 );
 

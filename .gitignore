@@ -37,3 +37,7 @@ docker/postgres/data/
 # Test and coverage outputs
 TestResults/
 coverage/
+
+
+# SQL dumps
+*.dump

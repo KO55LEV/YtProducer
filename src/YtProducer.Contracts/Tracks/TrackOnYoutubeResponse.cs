@@ -13,4 +13,5 @@ public sealed record TrackOnYoutubeResponse(
     string? FilePath,
     string? Status,
     string? Metadata,
+    DateTimeOffset? ScheduledPublishAtUtc,
     DateTimeOffset CreatedAtUtc);
