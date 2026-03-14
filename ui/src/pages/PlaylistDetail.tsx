@@ -1643,6 +1643,7 @@ function TrackAudioPlayer({
   deleteBusy: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const scrubRef = useRef<HTMLDivElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -1684,16 +1685,39 @@ function TrackAudioPlayer({
     }
   };
 
-  const handleSeek = (value: number) => {
+  const handleSeek = (value: number, options?: { autoplay?: boolean }) => {
     const audio = audioRef.current;
     if (!audio || !Number.isFinite(audio.duration)) return;
-    const nextTime = (value / 100) * audio.duration;
+    const safeValue = Math.max(0, Math.min(100, value));
+    const nextTime = (safeValue / 100) * audio.duration;
     audio.currentTime = nextTime;
     setCurrentTime(nextTime);
-    setSeekValue(value);
+    setSeekValue(safeValue);
+
+    if (options?.autoplay && audio.paused) {
+      void audio.play().then(() => setIsPlaying(true)).catch(() => {});
+    }
   };
 
-  const beginSeek = () => {
+  const resolveSeekValueFromClientX = (clientX: number) => {
+    const scrub = scrubRef.current;
+    if (!scrub) {
+      return 0;
+    }
+
+    const rect = scrub.getBoundingClientRect();
+    if (rect.width <= 0) {
+      return 0;
+    }
+
+    return ((clientX - rect.left) / rect.width) * 100;
+  };
+
+  const beginSeek = (clientX?: number, autoplay = false) => {
+    if (clientX !== undefined) {
+      handleSeek(resolveSeekValueFromClientX(clientX), { autoplay });
+    }
+
     setIsSeeking(true);
     setSeekValue(progress);
   };
@@ -1701,6 +1725,28 @@ function TrackAudioPlayer({
   const endSeek = () => {
     setIsSeeking(false);
   };
+
+  useEffect(() => {
+    if (!isSeeking) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      handleSeek(resolveSeekValueFromClientX(event.clientX));
+    };
+
+    const handlePointerUp = () => {
+      endSeek();
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [isSeeking, duration]);
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
   const displayedProgress = isSeeking ? seekValue : progress;
@@ -1746,28 +1792,37 @@ function TrackAudioPlayer({
         <div className="track-audio-time">
           {formatTime(currentTime)} / {formatTime(duration)}
         </div>
-        <input
+        <div
+          ref={scrubRef}
           className="track-audio-scrub"
-          type="range"
-          min={0}
-          max={100}
-          step={0.1}
-          value={displayedProgress}
-          onPointerDown={beginSeek}
-          onPointerUp={endSeek}
-          onMouseDown={beginSeek}
-          onMouseUp={endSeek}
-          onTouchStart={beginSeek}
-          onTouchEnd={endSeek}
-          onFocus={beginSeek}
-          onBlur={endSeek}
-          onInput={(event) => handleSeek(Number((event.target as HTMLInputElement).value))}
-          onChange={(event) => {
-            handleSeek(Number(event.target.value));
-            endSeek();
-          }}
+          role="slider"
           aria-label={`Scrub ${label}`}
-        />
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(displayedProgress)}
+          tabIndex={0}
+          onPointerDown={(event) => beginSeek(event.clientX, true)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              handleSeek(displayedProgress - 5);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              handleSeek(displayedProgress + 5);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              handleSeek(0);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              handleSeek(100);
+            }
+          }}
+        >
+          <div className="track-audio-scrub-track">
+            <div className="track-audio-scrub-fill" style={{ width: `${displayedProgress}%` }} />
+            <div className="track-audio-scrub-thumb" style={{ left: `${displayedProgress}%` }} />
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,9 +1,11 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
+using SkiaSharp;
 using YtProducer.Contracts.AlbumReleases;
 using YtProducer.Contracts.Jobs;
 using YtProducer.Domain.Entities;
@@ -15,6 +17,8 @@ namespace YtProducer.Api.Endpoints;
 
 public static class AlbumReleaseEndpoints
 {
+    private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
+
     public static IEndpointRouteBuilder MapAlbumReleaseEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/playlists/{playlistId:guid}/album-release").WithTags("AlbumRelease");
@@ -147,6 +151,18 @@ public static class AlbumReleaseEndpoints
         metadata = metadata with { ThumbnailVersion = metadata.ThumbnailVersion + 1 };
         release.Metadata = JsonSerializer.Serialize(metadata);
         release.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        var playlistRoot = ResolvePlaylistRoot(playlist.Id, configuration);
+        var thumbnailOutputPath = ResolveAlbumReleaseThumbnailOutputPath(release, playlistId, configuration);
+        if (!string.IsNullOrWhiteSpace(thumbnailOutputPath) &&
+            !string.IsNullOrWhiteSpace(playlistRoot) &&
+            Directory.Exists(playlistRoot))
+        {
+            var totalDurationSeconds = await ResolveAlbumReleaseTotalDurationSecondsAsync(playlist, DiscoverPlaylistMedia(playlistRoot), cancellationToken);
+            await RegenerateAlbumReleaseThumbnailFileAsync(release, playlist, playlistRoot, thumbnailOutputPath, totalDurationSeconds, cancellationToken);
+            release.ThumbnailPath = thumbnailOutputPath;
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(await MapAlbumReleaseResponseAsync(release, playlist, configuration, cancellationToken));
@@ -343,8 +359,8 @@ public static class AlbumReleaseEndpoints
         var playlistRoot = ResolvePlaylistRoot(playlist.Id, configuration);
         var metadata = ParseAlbumReleaseMetadata(release.Metadata);
         var mediaByPosition = DiscoverPlaylistMedia(playlistRoot);
-        var tracks = await BuildAlbumReleaseTracksAsync(playlist, mediaByPosition, cancellationToken);
-        var previewUrls = BuildThumbnailPreviewUrls(metadata.ThumbnailVersion, tracks);
+        var tracks = await BuildAlbumReleaseTracksAsync(playlist, playlistRoot, mediaByPosition, cancellationToken);
+        var previewUrls = BuildThumbnailPreviewUrls(playlist.Id, playlistRoot, metadata.ThumbnailVersion, tracks);
         var totalDurationSeconds = tracks.Sum(x => x.DurationSeconds);
         var tempFilesExist = !string.IsNullOrWhiteSpace(release.TempRootPath) && Directory.Exists(release.TempRootPath);
         var tempFileCount = tempFilesExist
@@ -388,6 +404,7 @@ public static class AlbumReleaseEndpoints
 
     private static async Task<List<AlbumReleaseTrackResponse>> BuildAlbumReleaseTracksAsync(
         Playlist playlist,
+        string? playlistRoot,
         IReadOnlyDictionary<int, PlaylistMediaBundle> mediaByPosition,
         CancellationToken cancellationToken)
     {
@@ -399,6 +416,7 @@ public static class AlbumReleaseEndpoints
             cancellationToken.ThrowIfCancellationRequested();
             mediaByPosition.TryGetValue(track.PlaylistPosition, out var media);
             var durationSeconds = await ResolveTrackDurationSecondsAsync(track, media, cancellationToken) ?? 0d;
+            var previewImageUrl = ResolveAlbumReleasePreviewImageUrl(playlist.Id, playlistRoot, track.PlaylistPosition);
             results.Add(new AlbumReleaseTrackResponse(
                 track.Id,
                 track.PlaylistPosition,
@@ -407,7 +425,7 @@ public static class AlbumReleaseEndpoints
                 durationSeconds,
                 offsetSeconds,
                 FormatTimestamp(offsetSeconds),
-                media?.Images.FirstOrDefault()?.Url,
+                previewImageUrl,
                 media?.Videos.FirstOrDefault()?.Url));
             offsetSeconds += durationSeconds;
         }
@@ -416,9 +434,17 @@ public static class AlbumReleaseEndpoints
     }
 
     private static IReadOnlyList<string> BuildThumbnailPreviewUrls(
+        Guid playlistId,
+        string? playlistRoot,
         int thumbnailVersion,
         IReadOnlyList<AlbumReleaseTrackResponse> tracks)
     {
+        var dedicatedThumbnailUrl = ResolveAlbumReleaseSourceThumbnailUrl(playlistId, playlistRoot);
+        if (!string.IsNullOrWhiteSpace(dedicatedThumbnailUrl))
+        {
+            return [dedicatedThumbnailUrl];
+        }
+
         var pool = tracks
             .Select(x => x.PreviewImageUrl)
             .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -440,6 +466,487 @@ public static class AlbumReleaseEndpoints
         }
 
         return result;
+    }
+
+    private static async Task<double> ResolveAlbumReleaseTotalDurationSecondsAsync(
+        Playlist playlist,
+        IReadOnlyDictionary<int, PlaylistMediaBundle> mediaByPosition,
+        CancellationToken cancellationToken)
+    {
+        var total = 0d;
+        foreach (var track in playlist.Tracks.OrderBy(x => x.PlaylistPosition))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            mediaByPosition.TryGetValue(track.PlaylistPosition, out var media);
+            total += await ResolveTrackDurationSecondsAsync(track, media, cancellationToken) ?? 0d;
+        }
+
+        return total;
+    }
+
+    private static string? ResolveAlbumReleasePreviewImageUrl(Guid playlistId, string? playlistRoot, int position)
+    {
+        if (string.IsNullOrWhiteSpace(playlistRoot) || !Directory.Exists(playlistRoot))
+        {
+            return null;
+        }
+
+        var imagePath = ResolveAlbumReleaseImagePathForPosition(playlistRoot, position);
+        if (string.IsNullOrWhiteSpace(imagePath))
+        {
+            return null;
+        }
+
+        var fileName = Path.GetFileName(imagePath);
+        return string.IsNullOrWhiteSpace(fileName)
+            ? null
+            : $"/playlists/{playlistId}/media/{fileName}";
+    }
+
+    private static string? ResolveAlbumReleaseSourceThumbnailUrl(Guid playlistId, string? playlistRoot)
+    {
+        if (string.IsNullOrWhiteSpace(playlistRoot) || !Directory.Exists(playlistRoot))
+        {
+            return null;
+        }
+
+        var thumbnailPath = ImageExtensions
+            .Select(ext => Path.Combine(playlistRoot, $"album_release_thumbnail{ext}"))
+            .FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(thumbnailPath))
+        {
+            return null;
+        }
+
+        var fileName = Path.GetFileName(thumbnailPath);
+        return string.IsNullOrWhiteSpace(fileName)
+            ? null
+            : $"/playlists/{playlistId}/media/{fileName}";
+    }
+
+    private static string? ResolveAlbumReleaseImagePathForPosition(string playlistRoot, int position)
+    {
+        var preferred = ImageExtensions
+            .Select(ext => Path.Combine(playlistRoot, $"{position}{ext}"))
+            .FirstOrDefault(File.Exists);
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            return preferred;
+        }
+
+        var fallback = ImageExtensions
+            .Select(ext => Path.Combine(playlistRoot, $"{position}_1{ext}"))
+            .FirstOrDefault(File.Exists);
+        if (!string.IsNullOrWhiteSpace(fallback))
+        {
+            return fallback;
+        }
+
+        return null;
+    }
+
+    private static async Task RegenerateAlbumReleaseThumbnailFileAsync(
+        AlbumRelease release,
+        Playlist playlist,
+        string playlistRoot,
+        string outputPath,
+        double totalDurationSeconds,
+        CancellationToken cancellationToken)
+    {
+        var dedicatedThumbnailPath = ResolveAlbumReleaseSourceThumbnailPath(playlistRoot);
+        if (!string.IsNullOrWhiteSpace(dedicatedThumbnailPath) && File.Exists(dedicatedThumbnailPath))
+        {
+            await SaveAlbumReleaseThumbnailAsJpegAsync(dedicatedThumbnailPath, outputPath, cancellationToken);
+            return;
+        }
+
+        var imagePaths = playlist.Tracks
+            .OrderBy(x => x.PlaylistPosition)
+            .Select(track => ResolveAlbumReleaseImagePathForPosition(playlistRoot, track.PlaylistPosition))
+            .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (imagePaths.Count == 0)
+        {
+            return;
+        }
+
+        var thumbnailVersion = ParseAlbumReleaseMetadata(release.Metadata).ThumbnailVersion;
+        var tileCount = Math.Min(4, imagePaths.Count);
+        var selected = Enumerable.Range(0, tileCount)
+            .Select(index => imagePaths[(thumbnailVersion + index) % imagePaths.Count])
+            .ToList();
+
+        using var surface = SKSurface.Create(new SKImageInfo(1280, 720))
+            ?? throw new InvalidOperationException("Failed to create album release thumbnail surface.");
+        var canvas = surface.Canvas;
+        canvas.Clear(new SKColor(8, 11, 14));
+
+        const int gap = 8;
+        var tiles = new[]
+        {
+            new SKRect(0, 0, 640, 360),
+            new SKRect(640, 0, 1280, 360),
+            new SKRect(0, 360, 640, 720),
+            new SKRect(640, 360, 1280, 720)
+        };
+
+        for (var index = 0; index < selected.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            using var bitmap = SKBitmap.Decode(selected[index]);
+            if (bitmap == null)
+            {
+                continue;
+            }
+
+            var target = tiles[index];
+            target.Inflate(-gap, -gap);
+            DrawAlbumReleaseTile(canvas, bitmap, target);
+        }
+
+        DrawAlbumReleaseOverlay(canvas);
+
+        var title = BuildAlbumReleaseDisplayTitle(release.Title, playlist.Title);
+        var subtitle = $"FULL ALBUM • {playlist.Tracks.Count} TRACKS • {FormatTimestamp(totalDurationSeconds)}";
+        DrawAlbumReleaseHeadline(canvas, title, new SKRect(54, 500, 1226, 638));
+        DrawAlbumReleaseSubtitle(canvas, subtitle, new SKPoint(58, 666));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? playlistRoot);
+        using var image = surface.Snapshot();
+        using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 92);
+        using var fileStream = File.Open(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        encoded.SaveTo(fileStream);
+        await fileStream.FlushAsync(cancellationToken);
+    }
+
+    private static string? ResolveAlbumReleaseThumbnailOutputPath(AlbumRelease release, Guid playlistId, IConfiguration configuration)
+    {
+        if (!string.IsNullOrWhiteSpace(release.ThumbnailPath))
+        {
+            var directory = Path.GetDirectoryName(release.ThumbnailPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                return Path.Combine(directory, "album_release_thumbnail.jpg");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(release.TempRootPath))
+        {
+            return Path.Combine(release.TempRootPath, "album_release_thumbnail.jpg");
+        }
+
+        var tempRoot = ResolveAlbumReleaseTempRoot(playlistId, configuration);
+        return string.IsNullOrWhiteSpace(tempRoot)
+            ? null
+            : Path.Combine(tempRoot, "album_release_thumbnail.jpg");
+    }
+
+    private static string? ResolveAlbumReleaseSourceThumbnailPath(string playlistRoot)
+    {
+        var thumbnailPath = ImageExtensions
+            .Select(ext => Path.Combine(playlistRoot, $"album_release_thumbnail{ext}"))
+            .FirstOrDefault(File.Exists);
+        if (!string.IsNullOrWhiteSpace(thumbnailPath))
+        {
+            return thumbnailPath;
+        }
+
+        return null;
+    }
+
+    private static async Task SaveAlbumReleaseThumbnailAsJpegAsync(string sourcePath, string outputPath, CancellationToken cancellationToken)
+    {
+        using var inputStream = File.OpenRead(sourcePath);
+        using var managedStream = new SKManagedStream(inputStream);
+        using var codec = SKCodec.Create(managedStream)
+            ?? throw new InvalidOperationException($"Failed to decode album release thumbnail source: {sourcePath}");
+        using var bitmap = SKBitmap.Decode(codec)
+            ?? throw new InvalidOperationException($"Failed to render album release thumbnail source: {sourcePath}");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
+        using var image = SKImage.FromBitmap(bitmap);
+        using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 92);
+        using var fileStream = File.Open(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        encoded.SaveTo(fileStream);
+        await fileStream.FlushAsync(cancellationToken);
+    }
+
+    private static void DrawAlbumReleaseTile(SKCanvas canvas, SKBitmap bitmap, SKRect target)
+    {
+        var sourceAspect = bitmap.Width / (float)bitmap.Height;
+        var targetAspect = target.Width / target.Height;
+
+        SKRect sourceRect;
+        if (sourceAspect > targetAspect)
+        {
+            var cropWidth = bitmap.Height * targetAspect;
+            var left = (bitmap.Width - cropWidth) / 2f;
+            sourceRect = new SKRect(left, 0, left + cropWidth, bitmap.Height);
+        }
+        else
+        {
+            var cropHeight = bitmap.Width / targetAspect;
+            var top = (bitmap.Height - cropHeight) / 2f;
+            sourceRect = new SKRect(0, top, bitmap.Width, top + cropHeight);
+        }
+
+        using var borderPaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(255, 255, 255, 28),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1
+        };
+
+        canvas.DrawBitmap(bitmap, sourceRect, target);
+        canvas.DrawRoundRect(target, 24, 24, borderPaint);
+    }
+
+    private static void DrawAlbumReleaseOverlay(SKCanvas canvas)
+    {
+        using var vertical = new SKPaint
+        {
+            IsAntialias = true,
+            Shader = SKShader.CreateLinearGradient(
+                new SKPoint(0, 720),
+                new SKPoint(0, 250),
+                [new SKColor(3, 8, 12, 248), new SKColor(3, 8, 12, 24)],
+                [0f, 1f],
+                SKShaderTileMode.Clamp)
+        };
+        canvas.DrawRect(new SKRect(0, 220, 1280, 720), vertical);
+
+        using var leftGlow = new SKPaint
+        {
+            IsAntialias = true,
+            Shader = SKShader.CreateRadialGradient(
+                new SKPoint(210, 590),
+                620,
+                [new SKColor(0, 0, 0, 172), new SKColor(0, 0, 0, 0)],
+                [0f, 1f],
+                SKShaderTileMode.Clamp)
+        };
+        canvas.DrawRect(new SKRect(0, 0, 1280, 720), leftGlow);
+    }
+
+    private static void DrawAlbumReleaseHeadline(SKCanvas canvas, string text, SKRect bounds)
+    {
+        var lines = BuildAlbumReleaseHeadlineLines(text);
+        if (lines.Count == 0)
+        {
+            return;
+        }
+
+        var typeface = ResolveAlbumReleaseHeadlineTypeface();
+        using var fillPaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(245, 239, 22),
+            Typeface = typeface,
+            Style = SKPaintStyle.Fill
+        };
+        using var strokePaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(6, 8, 10, 245),
+            Typeface = typeface,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 10,
+            StrokeJoin = SKStrokeJoin.Round
+        };
+        using var shadowPaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(0, 0, 0, 185),
+            Typeface = typeface,
+            Style = SKPaintStyle.Fill,
+            MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 4)
+        };
+
+        var textSize = 108f;
+        while (textSize > 44f)
+        {
+            fillPaint.TextSize = textSize;
+            strokePaint.TextSize = textSize;
+            shadowPaint.TextSize = textSize;
+
+            var widest = lines.Max(line => fillPaint.MeasureText(line));
+            var totalHeight = fillPaint.FontSpacing * 0.84f * lines.Count;
+            if (widest <= bounds.Width && totalHeight <= bounds.Height)
+            {
+                break;
+            }
+
+            textSize -= 2f;
+        }
+
+        var lineHeight = fillPaint.FontSpacing * 0.84f;
+        var y = bounds.Top - fillPaint.FontMetrics.Ascent;
+        foreach (var line in lines)
+        {
+            using var textPath = fillPaint.GetTextPath(line, bounds.Left, y);
+            canvas.DrawPath(textPath, shadowPaint);
+            canvas.DrawPath(textPath, strokePaint);
+            canvas.DrawPath(textPath, fillPaint);
+            DrawAlbumReleaseDistress(canvas, textPath, line);
+            y += lineHeight;
+        }
+    }
+
+    private static void DrawAlbumReleaseSubtitle(SKCanvas canvas, string text, SKPoint origin)
+    {
+        var sanitized = SanitizeAlbumReleaseText(text).ToUpperInvariant();
+        using var textPaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(255, 255, 255, 230),
+            Typeface = SKTypeface.FromFamilyName("Arial", SKFontStyleWeight.Bold, SKFontStyleWidth.Normal, SKFontStyleSlant.Upright),
+            TextSize = 28
+        };
+        using var shadowPaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(0, 0, 0, 160),
+            Typeface = textPaint.Typeface,
+            TextSize = textPaint.TextSize,
+            MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 3)
+        };
+
+        var y = origin.Y - textPaint.FontMetrics.Ascent;
+        canvas.DrawText(sanitized, origin.X + 3, y + 4, shadowPaint);
+        canvas.DrawText(sanitized, origin.X, y, textPaint);
+    }
+
+    private static List<string> BuildAlbumReleaseHeadlineLines(string text)
+    {
+        var sanitized = SanitizeAlbumReleaseText(text).ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(sanitized))
+        {
+            return new List<string>();
+        }
+
+        var parts = sanitized.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Trim())
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .ToList();
+
+        if (parts.Count >= 2)
+        {
+            var secondary = string.Join(" ", parts.Skip(1))
+                .Replace("FULL ALBUM", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Trim();
+
+            return new List<string> { parts[0], secondary }
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .Take(2)
+                .ToList();
+        }
+
+        var words = sanitized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length <= 4)
+        {
+            return new List<string> { sanitized };
+        }
+
+        var midpoint = (int)Math.Ceiling(words.Length / 2d);
+        return new List<string>
+        {
+            string.Join(" ", words.Take(midpoint)),
+            string.Join(" ", words.Skip(midpoint))
+        };
+    }
+
+    private static string BuildAlbumReleaseDisplayTitle(string? releaseTitle, string playlistTitle)
+    {
+        var raw = string.IsNullOrWhiteSpace(releaseTitle) ? $"{playlistTitle} | Full Album" : releaseTitle.Trim();
+        var sanitized = SanitizeAlbumReleaseText(raw);
+        sanitized = Regex.Replace(sanitized, "\\bFULL ALBUM\\b", string.Empty, RegexOptions.IgnoreCase).Trim(' ', '|', '-', '•');
+        return string.IsNullOrWhiteSpace(sanitized) ? "WORKOUT ALBUM" : sanitized;
+    }
+
+    private static string SanitizeAlbumReleaseText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var normalized = text.Normalize(NormalizationForm.FormKC);
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
+        {
+            if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch))
+            {
+                builder.Append(ch);
+                continue;
+            }
+
+            if ("|&:+-/()'.,•".Contains(ch))
+            {
+                builder.Append(ch);
+                continue;
+            }
+
+            builder.Append(' ');
+        }
+
+        return Regex.Replace(builder.ToString(), "\\s+", " ").Trim();
+    }
+
+    private static SKTypeface ResolveAlbumReleaseHeadlineTypeface()
+    {
+        return SKTypeface.FromFamilyName("Impact", SKFontStyleWeight.Black, SKFontStyleWidth.Condensed, SKFontStyleSlant.Upright)
+            ?? SKTypeface.FromFamilyName("Arial Narrow", SKFontStyleWeight.Bold, SKFontStyleWidth.Condensed, SKFontStyleSlant.Upright)
+            ?? SKTypeface.FromFamilyName("Arial", SKFontStyleWeight.Black, SKFontStyleWidth.Condensed, SKFontStyleSlant.Upright);
+    }
+
+    private static void DrawAlbumReleaseDistress(SKCanvas canvas, SKPath textPath, string seedText)
+    {
+        var bounds = textPath.Bounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return;
+        }
+
+        var seed = StringComparer.Ordinal.GetHashCode(seedText);
+        var random = new Random(seed);
+
+        canvas.Save();
+        canvas.ClipPath(textPath, SKClipOperation.Intersect, true);
+
+        using var erasePaint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = new SKColor(6, 8, 10, 255),
+            BlendMode = SKBlendMode.SrcOver
+        };
+
+        var dotCount = Math.Max(10, (int)(bounds.Width / 55f));
+        for (var i = 0; i < dotCount; i++)
+        {
+            var x = bounds.Left + (float)random.NextDouble() * bounds.Width;
+            var y = bounds.Top + (float)random.NextDouble() * bounds.Height;
+            var radius = 1.5f + (float)random.NextDouble() * 4.5f;
+            canvas.DrawCircle(x, y, radius, erasePaint);
+        }
+
+        var scratchCount = Math.Max(4, (int)(bounds.Width / 220f));
+        erasePaint.StrokeWidth = 2.5f;
+        erasePaint.Style = SKPaintStyle.Stroke;
+        erasePaint.StrokeCap = SKStrokeCap.Round;
+        for (var i = 0; i < scratchCount; i++)
+        {
+            var x = bounds.Left + (float)random.NextDouble() * bounds.Width;
+            var y = bounds.Top + (float)random.NextDouble() * bounds.Height;
+            var height = 8f + (float)random.NextDouble() * 18f;
+            canvas.DrawLine(x, y, x, y + height, erasePaint);
+        }
+
+        canvas.Restore();
     }
 
     private static async Task<string> BuildAlbumReleaseDescriptionAsync(Playlist playlist, string? playlistRoot, CancellationToken cancellationToken)

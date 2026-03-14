@@ -37,10 +37,17 @@ export default function AlbumReleasePage() {
   const [uploadJobId, setUploadJobId] = useState<string | null>(null);
   const [deleteTempJobId, setDeleteTempJobId] = useState<string | null>(null);
 
-  const previewImages = useMemo(
-    () => (albumRelease?.thumbnailPreviewUrls ?? []).map((url) => (url.startsWith("http") ? url : `${apiBaseUrl}${url}`)),
-    [albumRelease]
-  );
+  const generatedThumbnailUrl = useMemo(() => {
+    if (!albumRelease?.thumbnailUrl) {
+      return null;
+    }
+
+    const baseUrl = albumRelease.thumbnailUrl.startsWith("http")
+      ? albumRelease.thumbnailUrl
+      : `${apiBaseUrl}${albumRelease.thumbnailUrl}`;
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${separator}v=${encodeURIComponent(albumRelease.updatedAtUtc)}`;
+  }, [albumRelease]);
 
   async function loadPage(): Promise<void> {
     if (!id) {
@@ -256,26 +263,15 @@ export default function AlbumReleasePage() {
 
         <div className="album-release-cover-shell">
           <div className="album-release-cover">
-            {albumRelease.thumbnailUrl ? (
+            {generatedThumbnailUrl ? (
               <div className="album-release-cover-generated">
-                <img src={`${apiBaseUrl}${albumRelease.thumbnailUrl}`} alt={`${title} thumbnail`} />
-              </div>
-            ) : null}
-            {previewImages.length === 0 ? (
-              <div className="album-release-cover-empty">
-                <span>No playlist images yet</span>
+                <img src={generatedThumbnailUrl} alt={`${title} thumbnail`} />
               </div>
             ) : (
-              previewImages.map((url, index) => (
-                <div key={`${url}-${index}`} className="album-release-cover-tile">
-                  <img src={url} alt={`Album release preview ${index + 1}`} />
-                </div>
-              ))
+              <div className="album-release-cover-empty">
+                <span>No album thumbnail generated yet</span>
+              </div>
             )}
-            <div className="album-release-cover-overlay">
-              <span className="album-release-cover-label">Version {albumRelease.thumbnailVersion + 1}</span>
-              <strong>{title}</strong>
-            </div>
           </div>
           <div className="album-release-cover-actions">
             <button
