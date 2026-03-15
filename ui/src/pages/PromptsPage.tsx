@@ -966,6 +966,8 @@ export function PromptRunPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showInputPromptPreview, setShowInputPromptPreview] = useState(false);
+  const [copiedInputPrompt, setCopiedInputPrompt] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -1020,6 +1022,27 @@ export function PromptRunPage() {
     }
   }
 
+  async function handleCopyInputPrompt(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(combinedInputPrompt);
+      setCopiedInputPrompt(true);
+      window.setTimeout(() => setCopiedInputPrompt(false), 1400);
+    } catch {
+      setCopiedInputPrompt(false);
+    }
+  }
+
+  const isAlbumGeneration = template?.purpose === "album_generation";
+  const combinedInputPrompt = [
+    "System Prompt",
+    "",
+    resolvedSystemPrompt.trim() || "—",
+    "",
+    "User Prompt",
+    "",
+    resolvedUserPrompt.trim() || "—"
+  ].join("\n");
+
   if (loading) {
     return (
       <div className="page-content">
@@ -1059,6 +1082,11 @@ export function PromptRunPage() {
           <Link to={`/prompts/${template.id}/edit`} className="btn btn-secondary">
             Edit Prompt
           </Link>
+          {isAlbumGeneration ? (
+            <button type="button" className="btn btn-secondary" onClick={() => setShowInputPromptPreview(true)}>
+              Input Prompt
+            </button>
+          ) : null}
           <button type="button" className="btn btn-primary" onClick={handleRunPrompt} disabled={saving}>
             {saving ? "Scheduling..." : "Run Prompt"}
           </button>
@@ -1099,13 +1127,13 @@ export function PromptRunPage() {
                   <span>Model</span>
                   <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gemini-3.1-pro" />
                 </label>
-                <label className="prompt-field">
-                  <span>Resolved System Prompt</span>
-                  <textarea rows={10} value={resolvedSystemPrompt} onChange={(e) => setResolvedSystemPrompt(e.target.value)} />
-                </label>
               </div>
 
               <div className="prompt-generation-form">
+                <label className="prompt-field prompt-field-full">
+                  <span>Resolved System Prompt</span>
+                  <textarea rows={12} value={resolvedSystemPrompt} onChange={(e) => setResolvedSystemPrompt(e.target.value)} />
+                </label>
                 <label className="prompt-field">
                   <span>Resolved User Prompt</span>
                   <textarea rows={14} value={resolvedUserPrompt} onChange={(e) => setResolvedUserPrompt(e.target.value)} />
@@ -1157,6 +1185,47 @@ export function PromptRunPage() {
           </section>
         </aside>
       </div>
+
+      {showInputPromptPreview ? (
+        <div className="prompts-modal" role="dialog" aria-modal="true" onClick={() => setShowInputPromptPreview(false)}>
+          <div className="prompts-modal-content prompts-modal-content-narrow" onClick={(event) => event.stopPropagation()}>
+            <div className="prompts-modal-header">
+              <div>
+                <h3>Input Prompt</h3>
+                <p>Preview the exact prompt you can copy into an LLM manually.</p>
+              </div>
+              <div className="prompt-modal-actions">
+                <button
+                  type="button"
+                  className="prompt-copy-btn"
+                  onClick={() => void handleCopyInputPrompt()}
+                >
+                  {copiedInputPrompt ? "Copied" : "Copy"}
+                </button>
+                <button
+                  type="button"
+                  className="prompts-modal-close"
+                  onClick={() => setShowInputPromptPreview(false)}
+                  aria-label="Close modal"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div className="prompt-modal-sections">
+              <article className="prompt-card">
+                <div className="prompt-card-header">
+                  <div className="prompt-card-title">
+                    <span className="prompt-card-track">Combined Prompt</span>
+                  </div>
+                </div>
+                <pre className="prompt-card-text">{combinedInputPrompt}</pre>
+              </article>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

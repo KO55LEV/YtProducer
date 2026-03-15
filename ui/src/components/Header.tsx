@@ -10,10 +10,17 @@ export default function Header() {
         </Link>
         <nav className="nav">
           <Link to="/" className="nav-link">Home</Link>
-          <Link to="/playlists" className="nav-link">Playlists</Link>
-          <Link to="/prompts" className="nav-link">Prompts</Link>
-          <Link to="/youtube-engagements" className="nav-link">Engagements</Link>
-          <Link to="/create-loop" className="nav-link">Create Loop</Link>
+          <div className="nav-dropdown">
+            <button type="button" className="nav-link nav-dropdown-trigger" aria-haspopup="true">
+              Music
+            </button>
+            <div className="nav-dropdown-menu">
+              <Link to="/playlists" className="nav-dropdown-link">Playlists</Link>
+              <Link to="/prompts" className="nav-dropdown-link">Prompts</Link>
+              <Link to="/youtube-engagements" className="nav-dropdown-link">Engagements</Link>
+              <Link to="/create-loop" className="nav-dropdown-link">Create Loop</Link>
+            </div>
+          </div>
           <Link to="/jobs" className="nav-link">Jobs</Link>
         </nav>
       </div>
