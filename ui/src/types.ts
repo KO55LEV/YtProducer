@@ -185,6 +185,25 @@ export type SchedulePromptGenerationRunResponse = {
   jobStatus: string;
 };
 
+export type ManualPromptGenerationRequest = {
+  inputLabel?: string | null;
+  inputJson: string;
+  model?: string | null;
+  resolvedSystemPrompt?: string | null;
+  resolvedUserPrompt?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  outputType?: string | null;
+  outputLabel?: string | null;
+  outputText?: string | null;
+  outputJson?: string | null;
+  isValid: boolean;
+  validationErrors?: string | null;
+  providerResponseJson?: string | null;
+  manualProvider?: string | null;
+  manualModel?: string | null;
+};
+
 export type TrackVideoGeneration = {
   id: string;
   trackId: string;

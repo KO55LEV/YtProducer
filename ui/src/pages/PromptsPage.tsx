@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import type { PromptGeneration, PromptTemplate, SchedulePromptGenerationRunResponse } from "../types";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import type {
+  ManualPromptGenerationRequest,
+  PromptGeneration,
+  PromptTemplate,
+  SchedulePromptGenerationRunResponse
+} from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -71,6 +76,18 @@ function resolveUserPromptTemplate(template: PromptTemplate, inputLabel: string,
     .replace(/{{input_json}}/g, inputJson);
 }
 
+function buildCombinedInputPrompt(resolvedSystemPrompt: string, resolvedUserPrompt: string): string {
+  return [
+    "System Prompt",
+    "",
+    resolvedSystemPrompt.trim() || "—",
+    "",
+    "User Prompt",
+    "",
+    resolvedUserPrompt.trim() || "—"
+  ].join("\n");
+}
+
 async function readApiError(response: Response, fallback: string): Promise<string> {
   try {
     const data = (await response.json()) as { message?: string };
@@ -125,6 +142,31 @@ async function schedulePromptGenerationRun(generationId: string): Promise<Schedu
 
   return (await response.json()) as SchedulePromptGenerationRunResponse;
 }
+
+async function createManualPromptGeneration(
+  templateId: string,
+  request: ManualPromptGenerationRequest
+): Promise<PromptGeneration> {
+  const response = await fetch(`${apiBaseUrl}/prompt-templates/${templateId}/manual-generations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, `Create manual generation failed with status ${response.status}`));
+  }
+
+  return (await response.json()) as PromptGeneration;
+}
+
+type PromptRunDraftState = {
+  inputLabel: string;
+  inputJson: string;
+  model: string;
+  resolvedSystemPrompt: string;
+  resolvedUserPrompt: string;
+};
 
 async function savePromptGenerationOutput(
   generationId: string,
@@ -1032,16 +1074,24 @@ export function PromptRunPage() {
     }
   }
 
+  function handleOpenManualRun(): void {
+    if (!template) {
+      return;
+    }
+
+    navigate(`/prompts/${template.id}/manual`, {
+      state: {
+        inputLabel,
+        inputJson,
+        model,
+        resolvedSystemPrompt,
+        resolvedUserPrompt
+      } satisfies PromptRunDraftState
+    });
+  }
+
   const isAlbumGeneration = template?.purpose === "album_generation";
-  const combinedInputPrompt = [
-    "System Prompt",
-    "",
-    resolvedSystemPrompt.trim() || "—",
-    "",
-    "User Prompt",
-    "",
-    resolvedUserPrompt.trim() || "—"
-  ].join("\n");
+  const combinedInputPrompt = buildCombinedInputPrompt(resolvedSystemPrompt, resolvedUserPrompt);
 
   if (loading) {
     return (
@@ -1082,6 +1132,11 @@ export function PromptRunPage() {
           <Link to={`/prompts/${template.id}/edit`} className="btn btn-secondary">
             Edit Prompt
           </Link>
+          {isAlbumGeneration ? (
+            <button type="button" className="btn btn-secondary" onClick={handleOpenManualRun}>
+              Manual Run
+            </button>
+          ) : null}
           {isAlbumGeneration ? (
             <button type="button" className="btn btn-secondary" onClick={() => setShowInputPromptPreview(true)}>
               Input Prompt
@@ -1226,6 +1281,234 @@ export function PromptRunPage() {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+export function PromptManualRunPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { id } = useParams<{ id: string }>();
+  const [template, setTemplate] = useState<PromptTemplate | null>(null);
+  const [inputLabel, setInputLabel] = useState("");
+  const [inputJson, setInputJson] = useState("{\n  \n}");
+  const [model, setModel] = useState("");
+  const [resolvedSystemPrompt, setResolvedSystemPrompt] = useState("");
+  const [resolvedUserPrompt, setResolvedUserPrompt] = useState("");
+  const [manualResponse, setManualResponse] = useState("");
+  const [manualProvider, setManualProvider] = useState("");
+  const [manualModel, setManualModel] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedInputPrompt, setCopiedInputPrompt] = useState(false);
+
+  const draftState = (location.state as PromptRunDraftState | null) ?? null;
+
+  useEffect(() => {
+    if (!id) return;
+    void loadTemplate();
+  }, [id]);
+
+  async function loadTemplate(): Promise<void> {
+    if (!id) return;
+
+    try {
+      setLoading(true);
+      const templateData = await loadPromptTemplate(id);
+      setTemplate(templateData);
+
+      if (draftState) {
+        setInputLabel(draftState.inputLabel);
+        setInputJson(draftState.inputJson);
+        setModel(draftState.model);
+        setResolvedSystemPrompt(draftState.resolvedSystemPrompt);
+        setResolvedUserPrompt(draftState.resolvedUserPrompt);
+      } else {
+        setInputLabel("");
+        setInputJson("{\n  \n}");
+        setModel(templateData.model ?? "");
+        setResolvedSystemPrompt(templateData.systemPrompt?.trim() ?? "");
+        setResolvedUserPrompt(resolveUserPromptTemplate(templateData, "", "{\n  \n}"));
+      }
+
+      setManualProvider(templateData.provider);
+      setManualModel(draftState?.model || templateData.model || "");
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load manual run page");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCopyInputPrompt(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(combinedInputPrompt);
+      setCopiedInputPrompt(true);
+      window.setTimeout(() => setCopiedInputPrompt(false), 1400);
+    } catch {
+      setCopiedInputPrompt(false);
+    }
+  }
+
+  async function handleSaveManualRun(): Promise<void> {
+    if (!template) {
+      return;
+    }
+
+    try {
+      JSON.parse(inputJson);
+    } catch {
+      setError("Input JSON must be valid JSON.");
+      return;
+    }
+
+    if (!manualResponse.trim()) {
+      setError("Manual response is required.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError(null);
+
+      await createManualPromptGeneration(template.id, {
+        inputLabel: inputLabel.trim() || null,
+        inputJson,
+        model: model.trim() || null,
+        resolvedSystemPrompt: resolvedSystemPrompt.trim() || null,
+        resolvedUserPrompt: resolvedUserPrompt.trim() || null,
+        outputType: "text",
+        outputLabel: "Manual Response",
+        outputText: manualResponse.trim(),
+        isValid: true,
+        validationErrors: null,
+        providerResponseJson: null,
+        manualProvider: manualProvider.trim() || template.provider,
+        manualModel: manualModel.trim() || model.trim() || null
+      });
+
+      navigate(`/prompts/${template.id}/generations`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save manual generation");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const combinedInputPrompt = buildCombinedInputPrompt(resolvedSystemPrompt, resolvedUserPrompt);
+
+  if (loading) {
+    return (
+      <div className="page-content">
+        <div className="loading-state">
+          <div className="spinner"></div>
+          <p>Loading manual run page...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!template) {
+    return (
+      <div className="page-content">
+        <div className="empty-state">
+          <h2>Prompt not found</h2>
+          <p>The selected template could not be loaded.</p>
+          <Link to="/prompts" className="btn btn-secondary">
+            Back to Prompts
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-content">
+      <div className="page-header-section album-template-detail-header">
+        <div>
+          <Link to={`/prompts/${template.id}/run`} className="breadcrumb">
+            ← Back to Run Prompt
+          </Link>
+          <h1 className="page-title">{template.name}</h1>
+          <p className="page-subtitle">Copy the resolved prompt, run it manually in your LLM, then save the response as a generation.</p>
+        </div>
+        <div className="header-actions">
+          <button type="button" className="btn btn-secondary" onClick={() => void handleCopyInputPrompt()}>
+            {copiedInputPrompt ? "Copied" : "Copy Input Prompt"}
+          </button>
+          <button type="button" className="btn btn-primary" onClick={handleSaveManualRun} disabled={saving}>
+            {saving ? "Saving..." : "Save Manual Generation"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="alert alert-error">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
+      <div className="album-template-detail-layout">
+        <section className="album-template-main">
+          <section className="prompt-card-shell">
+            <div className="prompt-card-header">
+              <div>
+                <h2 className="section-title">Manual Run</h2>
+                <p className="prompt-card-subtitle">This will create a generation and primary output without scheduling a worker job.</p>
+              </div>
+            </div>
+
+            <div className="album-template-generate-grid">
+              <div className="prompt-generation-form">
+                <label className="prompt-field prompt-field-full">
+                  <span>Combined Input Prompt</span>
+                  <pre className="prompt-code-block prompt-code-block-tall">{combinedInputPrompt}</pre>
+                </label>
+              </div>
+
+              <div className="prompt-generation-form">
+                <label className="prompt-field prompt-field-full">
+                  <span>Manual Response</span>
+                  <textarea
+                    rows={28}
+                    value={manualResponse}
+                    onChange={(e) => setManualResponse(e.target.value)}
+                    placeholder="Paste the LLM response here"
+                  />
+                </label>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside className="album-template-sidebar">
+          <section className="prompt-card-shell album-template-summary-card">
+            <div className="prompt-card-header">
+              <div>
+                <h2 className="section-title">Manual Metadata</h2>
+                <p className="prompt-card-subtitle">Saved generations will be marked as manual in run metadata.</p>
+              </div>
+            </div>
+
+            <div className="album-template-summary-list">
+              <div className="album-template-summary-item">
+                <span className="job-summary-label">Execution Mode</span>
+                <span className="job-summary-value">manual</span>
+              </div>
+              <div className="album-template-summary-item">
+                <span className="job-summary-label">Stored Prompt</span>
+                <span className="job-summary-value">Resolved system + user prompt</span>
+              </div>
+              <div className="album-template-summary-item">
+                <span className="job-summary-label">Output</span>
+                <span className="job-summary-value">Primary manual response</span>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
     </div>
   );
 }

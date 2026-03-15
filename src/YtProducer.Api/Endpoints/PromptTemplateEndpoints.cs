@@ -40,6 +40,11 @@ public static class PromptTemplateEndpoints
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
 
+        group.MapPost("/{id:guid}/manual-generations", CreateManualPromptGenerationAsync)
+            .Produces<PromptGenerationResponse>(StatusCodes.Status201Created)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
         app.MapGet("/prompt-generations", GetAllPromptGenerationsAsync)
             .WithTags("PromptTemplates")
             .Produces<IReadOnlyList<PromptGenerationResponse>>(StatusCodes.Status200OK);
@@ -336,6 +341,100 @@ public static class PromptTemplateEndpoints
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/prompt-generations/{item.Id}", MapGeneration(item));
+    }
+
+    private static async Task<IResult> CreateManualPromptGenerationAsync(
+        Guid id,
+        ManualPromptGenerationRequest request,
+        YtProducerDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        var template = await dbContext.PromptTemplates
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (template is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.InputJson))
+        {
+            return Results.BadRequest(new { message = "InputJson is required." });
+        }
+
+        if (!TryValidateJsonPayload(request.InputJson, out var inputError))
+        {
+            return Results.BadRequest(new { message = inputError });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.OutputText) && string.IsNullOrWhiteSpace(request.OutputJson))
+        {
+            return Results.BadRequest(new { message = "Either OutputText or OutputJson is required." });
+        }
+
+        if (!TryValidateJsonPayload(request.OutputJson, out var outputJsonError))
+        {
+            return Results.BadRequest(new { message = outputJsonError });
+        }
+
+        if (!TryValidateJsonPayload(request.ProviderResponseJson, out var responseJsonError))
+        {
+            return Results.BadRequest(new { message = responseJsonError });
+        }
+
+        var inputJson = NormalizeJsonPayload(request.InputJson);
+        var inputLabel = NormalizeOptionalText(request.InputLabel);
+        var now = DateTimeOffset.UtcNow;
+        var generation = new PromptGeneration
+        {
+            Id = Guid.NewGuid(),
+            TemplateId = template.Id,
+            Purpose = template.Category,
+            Provider = template.Provider,
+            Status = request.IsValid ? PromptGenerationStatus.Completed : PromptGenerationStatus.Failed,
+            Model = string.IsNullOrWhiteSpace(request.Model) ? template.DefaultModel : request.Model.Trim(),
+            InputLabel = inputLabel,
+            InputJson = inputJson,
+            ResolvedSystemPrompt = NormalizeOptionalText(request.ResolvedSystemPrompt) ?? ResolveSystemPrompt(template),
+            ResolvedUserPrompt = NormalizeOptionalText(request.ResolvedUserPrompt) ?? ResolveUserPrompt(template, inputLabel ?? string.Empty, inputJson),
+            TokenUsageJson = "{}",
+            RunMetadataJson = JsonSerializer.Serialize(new
+            {
+                executionMode = "manual",
+                manualRun = true,
+                manualProvider = NormalizeOptionalText(request.ManualProvider) ?? template.Provider,
+                manualModel = NormalizeOptionalText(request.ManualModel) ?? NormalizeOptionalText(request.Model) ?? template.DefaultModel,
+                savedFrom = "prompt_manual_run_page",
+                savedAtUtc = now
+            }),
+            TargetType = NormalizeOptionalText(request.TargetType),
+            TargetId = NormalizeOptionalText(request.TargetId),
+            CreatedAtUtc = now,
+            StartedAtUtc = now,
+            FinishedAtUtc = now,
+            ErrorMessage = request.IsValid ? null : NormalizeOptionalText(request.ValidationErrors)
+        };
+
+        var output = new PromptGenerationOutput
+        {
+            Id = Guid.NewGuid(),
+            PromptGenerationId = generation.Id,
+            OutputType = string.IsNullOrWhiteSpace(request.OutputType) ? "text" : request.OutputType.Trim(),
+            OutputLabel = NormalizeOptionalText(request.OutputLabel) ?? "Manual Response",
+            OutputText = NormalizeOptionalText(request.OutputText),
+            OutputJson = NormalizeOptionalJsonPayload(request.OutputJson),
+            IsPrimary = true,
+            IsValid = request.IsValid,
+            ValidationErrors = NormalizeOptionalText(request.ValidationErrors),
+            ProviderResponseJson = NormalizeOptionalJsonPayload(request.ProviderResponseJson),
+            CreatedAtUtc = now
+        };
+
+        generation.Outputs.Add(output);
+        dbContext.PromptGenerations.Add(generation);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Results.Created($"/prompt-generations/{generation.Id}", MapGeneration(generation));
     }
 
     private static async Task<IResult> GetAllPromptGenerationsAsync(

@@ -6,7 +6,7 @@ import Home from "./pages/Home";
 import JobsMonitor from "./pages/JobsMonitor";
 import ListManager from "./pages/ListManager";
 import PlaylistDetail from "./pages/PlaylistDetail";
-import PromptsPage, { PromptEditorPage, PromptGenerationsPage, PromptRunPage } from "./pages/PromptsPage";
+import PromptsPage, { PromptEditorPage, PromptGenerationsPage, PromptManualRunPage, PromptRunPage } from "./pages/PromptsPage";
 import YoutubeEngagementsPage from "./pages/YoutubeEngagementsPage";
 import YoutubePlaylists from "./pages/YoutubePlaylists";
 
@@ -25,7 +25,7 @@ export default function App() {
             <Route path="/prompts/:id/edit" element={<PromptEditorPage />} />
             <Route path="/prompts/:id/generations" element={<PromptGenerationsPage />} />
             <Route path="/prompts/:id/run" element={<PromptRunPage />} />
-            <Route path="/prompts/:id/manual" element={<Navigate to="../run" replace />} />
+            <Route path="/prompts/:id/manual" element={<PromptManualRunPage />} />
             <Route path="/album-templates" element={<Navigate to="/prompts" replace />} />
             <Route path="/album-templates/new" element={<Navigate to="/prompts/new" replace />} />
             <Route path="/album-templates/:id" element={<Navigate to="generations" replace />} />
